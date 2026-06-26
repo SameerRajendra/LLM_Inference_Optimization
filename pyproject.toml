@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=70.1", "wheel", "pybind11>=2.12", "ninja", "packaging"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparse-kv"
+version = "0.1.0"
+description = "Sparse + quantized KV cache with fused CUDA eviction kernels"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+dependencies = [
+    "torch>=2.4.0",
+    "triton>=3.0.0",
+    "transformers>=4.43.0",
+    "accelerate>=0.33.0",
+    "bitsandbytes>=0.43.3",
+    "einops",
+    "numpy",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev  = ["pytest", "pytest-benchmark", "pandas", "matplotlib", "seaborn", "wandb"]
+jax  = ["jax[cuda12_pip]", "jaxlib"]
+vllm = ["vllm==0.5.3"]
+all  = ["sparse-kv[dev,jax,vllm]"]
+
+[tool.setuptools.packages.find]
+where   = ["."]
+include = ["sparse_kv*"]
+
+[tool.pytest.ini_options]
+testpaths   = ["tests"]
+python_files = ["test_*.py"]

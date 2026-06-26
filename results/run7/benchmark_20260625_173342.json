@@ -1,0 +1,162 @@
+[
+  {
+    "method": "SDPA (dense)",
+    "ctx_len": 4096,
+    "top_k": 32,
+    "category": "dense",
+    "latency_ms": 0.03327360609546304,
+    "mem_gb": 0.067108864,
+    "speedup": 1.0,
+    "mem_savings": 1.0
+  },
+  {
+    "method": "Sparse (PyTorch ref)",
+    "ctx_len": 4096,
+    "top_k": 32,
+    "category": "sparse",
+    "latency_ms": 0.11524045839905739,
+    "mem_gb": 0.000524288,
+    "speedup": 0.28873198317419396,
+    "mem_savings": 128.0
+  },
+  {
+    "method": "sparse-kv (CUDA)",
+    "ctx_len": 4096,
+    "top_k": 32,
+    "category": "sparse",
+    "latency_ms": 0.9050432476215065,
+    "mem_gb": 0.000524288,
+    "speedup": 0.03676465868665121,
+    "mem_savings": 128.0
+  },
+  {
+    "method": "sparse-kv + INT8",
+    "ctx_len": 4096,
+    "top_k": 32,
+    "category": "sparse+quant",
+    "latency_ms": 0.9050432476215065,
+    "mem_gb": 0.000262144,
+    "speedup": 0.03676465868665121,
+    "mem_savings": 512.0
+  },
+  {
+    "method": "SDPA (dense)",
+    "ctx_len": 16384,
+    "top_k": 32,
+    "category": "dense",
+    "latency_ms": 0.09066375205293298,
+    "mem_gb": 0.268435456,
+    "speedup": 1.0,
+    "mem_savings": 1.0
+  },
+  {
+    "method": "Sparse (PyTorch ref)",
+    "ctx_len": 16384,
+    "top_k": 32,
+    "category": "sparse",
+    "latency_ms": 0.27760020457208157,
+    "mem_gb": 0.000524288,
+    "speedup": 0.32659828976960015,
+    "mem_savings": 512.0
+  },
+  {
+    "method": "sparse-kv (CUDA)",
+    "ctx_len": 16384,
+    "top_k": 32,
+    "category": "sparse",
+    "latency_ms": 3.4395133960060775,
+    "mem_gb": 0.000524288,
+    "speedup": 0.02635947054551689,
+    "mem_savings": 512.0
+  },
+  {
+    "method": "sparse-kv + INT8",
+    "ctx_len": 16384,
+    "top_k": 32,
+    "category": "sparse+quant",
+    "latency_ms": 3.4395133960060775,
+    "mem_gb": 0.000262144,
+    "speedup": 0.02635947054551689,
+    "mem_savings": 2048.0
+  },
+  {
+    "method": "SDPA (dense)",
+    "ctx_len": 65536,
+    "top_k": 32,
+    "category": "dense",
+    "latency_ms": 0.30024469597265124,
+    "mem_gb": 1.073741824,
+    "speedup": 1.0,
+    "mem_savings": 1.0
+  },
+  {
+    "method": "Sparse (PyTorch ref)",
+    "ctx_len": 65536,
+    "top_k": 32,
+    "category": "sparse",
+    "latency_ms": 1.0777075425721705,
+    "mem_gb": 0.000524288,
+    "speedup": 0.2785957081232405,
+    "mem_savings": 2048.0
+  },
+  {
+    "method": "sparse-kv (CUDA)",
+    "ctx_len": 65536,
+    "top_k": 32,
+    "category": "sparse",
+    "latency_ms": 13.603145501110703,
+    "mem_gb": 0.000524288,
+    "speedup": 0.02207171098391443,
+    "mem_savings": 2048.0
+  },
+  {
+    "method": "sparse-kv + INT8",
+    "ctx_len": 65536,
+    "top_k": 32,
+    "category": "sparse+quant",
+    "latency_ms": 13.603145501110703,
+    "mem_gb": 0.000262144,
+    "speedup": 0.02207171098391443,
+    "mem_savings": 8192.0
+  },
+  {
+    "method": "SDPA (dense)",
+    "ctx_len": 131072,
+    "top_k": 32,
+    "category": "dense",
+    "latency_ms": 0.5801250459626317,
+    "mem_gb": 2.147483648,
+    "speedup": 1.0,
+    "mem_savings": 1.0
+  },
+  {
+    "method": "Sparse (PyTorch ref)",
+    "ctx_len": 131072,
+    "top_k": 32,
+    "category": "sparse",
+    "latency_ms": 2.0515200565569103,
+    "mem_gb": 0.000524288,
+    "speedup": 0.28277814984478494,
+    "mem_savings": 4096.0
+  },
+  {
+    "method": "sparse-kv (CUDA)",
+    "ctx_len": 131072,
+    "top_k": 32,
+    "category": "sparse",
+    "latency_ms": 27.15517944889143,
+    "mem_gb": 0.000524288,
+    "speedup": 0.02136332949132157,
+    "mem_savings": 4096.0
+  },
+  {
+    "method": "sparse-kv + INT8",
+    "ctx_len": 131072,
+    "top_k": 32,
+    "category": "sparse+quant",
+    "latency_ms": 27.15517944889143,
+    "mem_gb": 0.000262144,
+    "speedup": 0.02136332949132157,
+    "mem_savings": 16384.0
+  }
+]

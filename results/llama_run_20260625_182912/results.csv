@@ -1,0 +1,3 @@
+ctx_len,mode,latency_ms,speedup
+4096,dense,13.157,1.0
+4096,sparse-kv,13.167,0.999

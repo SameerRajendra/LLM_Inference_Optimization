@@ -1,0 +1,24 @@
+# torch installed separately — do NOT put torch here
+triton==2.3.1
+
+transformers==4.43.0
+accelerate==0.33.0
+bitsandbytes==0.43.3
+tokenizers>=0.19
+sentencepiece
+einops
+
+ninja
+pybind11>=2.12
+packaging
+
+numpy==1.26.4
+scipy
+pandas
+matplotlib
+seaborn
+tqdm
+wandb
+
+pytest
+pytest-benchmark

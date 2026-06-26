@@ -1,0 +1,19 @@
+{
+  "model": "meta-llama/Meta-Llama-3.1-8B",
+  "top_k": 32,
+  "timestamp": "20260625_182912",
+  "results": [
+    {
+      "ctx_len": 4096,
+      "mode": "dense",
+      "latency_ms": 13.157,
+      "speedup": 1.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "sparse-kv",
+      "latency_ms": 13.167,
+      "speedup": 0.999
+    }
+  ]
+}

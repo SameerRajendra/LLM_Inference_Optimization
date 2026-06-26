@@ -1,0 +1,4 @@
+# pip install -r requirements-jax.txt
+--find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+jax[cuda12_pip]
+jaxlib

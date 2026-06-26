@@ -1,0 +1,146 @@
+[
+  {
+    "method": "SDPA (dense)",
+    "ctx_len": 4096,
+    "top_k": 32,
+    "latency_ms": 0.03372550709173083,
+    "mem_gb": 0.067108864,
+    "speedup": 1.0,
+    "mem_savings": 1.0
+  },
+  {
+    "method": "Sparse (PyTorch ref)",
+    "ctx_len": 4096,
+    "top_k": 32,
+    "latency_ms": 0.11559405829757452,
+    "mem_gb": 0.000524288,
+    "speedup": 0.2917581369529483,
+    "mem_savings": 128.0
+  },
+  {
+    "method": "sparse-kv (CUDA)",
+    "ctx_len": 4096,
+    "top_k": 32,
+    "latency_ms": 0.00647085253149271,
+    "mem_gb": 0.000524288,
+    "speedup": 5.211910938719996,
+    "mem_savings": 128.0
+  },
+  {
+    "method": "sparse-kv + INT8",
+    "ctx_len": 4096,
+    "top_k": 32,
+    "latency_ms": 0.00647085253149271,
+    "mem_gb": 0.000262144,
+    "speedup": 5.211910938719996,
+    "mem_savings": 512.0
+  },
+  {
+    "method": "SDPA (dense)",
+    "ctx_len": 16384,
+    "top_k": 32,
+    "latency_ms": 0.08964820299297571,
+    "mem_gb": 0.268435456,
+    "speedup": 1.0,
+    "mem_savings": 1.0
+  },
+  {
+    "method": "Sparse (PyTorch ref)",
+    "ctx_len": 16384,
+    "top_k": 32,
+    "latency_ms": 0.2801866037771106,
+    "mem_gb": 0.000524288,
+    "speedup": 0.3199589194645836,
+    "mem_savings": 512.0
+  },
+  {
+    "method": "sparse-kv (CUDA)",
+    "ctx_len": 16384,
+    "top_k": 32,
+    "latency_ms": 0.006393692456185818,
+    "mem_gb": 0.000524288,
+    "speedup": 14.02135051182235,
+    "mem_savings": 512.0
+  },
+  {
+    "method": "sparse-kv + INT8",
+    "ctx_len": 16384,
+    "top_k": 32,
+    "latency_ms": 0.006393692456185818,
+    "mem_gb": 0.000262144,
+    "speedup": 14.02135051182235,
+    "mem_savings": 2048.0
+  },
+  {
+    "method": "SDPA (dense)",
+    "ctx_len": 65536,
+    "top_k": 32,
+    "latency_ms": 0.30036369571462274,
+    "mem_gb": 1.073741824,
+    "speedup": 1.0,
+    "mem_savings": 1.0
+  },
+  {
+    "method": "Sparse (PyTorch ref)",
+    "ctx_len": 65536,
+    "top_k": 32,
+    "latency_ms": 1.0827012942172587,
+    "mem_gb": 0.000524288,
+    "speedup": 0.27742064899975144,
+    "mem_savings": 2048.0
+  },
+  {
+    "method": "sparse-kv (CUDA)",
+    "ctx_len": 65536,
+    "top_k": 32,
+    "latency_ms": 0.0062368460930883884,
+    "mem_gb": 0.000524288,
+    "speedup": 48.159549110484356,
+    "mem_savings": 2048.0
+  },
+  {
+    "method": "sparse-kv + INT8",
+    "ctx_len": 65536,
+    "top_k": 32,
+    "latency_ms": 0.0062368460930883884,
+    "mem_gb": 0.000262144,
+    "speedup": 48.159549110484356,
+    "mem_savings": 8192.0
+  },
+  {
+    "method": "SDPA (dense)",
+    "ctx_len": 131072,
+    "top_k": 32,
+    "latency_ms": 0.5802948493510485,
+    "mem_gb": 2.147483648,
+    "speedup": 1.0,
+    "mem_savings": 1.0
+  },
+  {
+    "method": "Sparse (PyTorch ref)",
+    "ctx_len": 131072,
+    "top_k": 32,
+    "latency_ms": 2.0535422605462372,
+    "mem_gb": 0.000524288,
+    "speedup": 0.28258237509886525,
+    "mem_savings": 4096.0
+  },
+  {
+    "method": "sparse-kv (CUDA)",
+    "ctx_len": 131072,
+    "top_k": 32,
+    "latency_ms": 0.006215949542820454,
+    "mem_gb": 0.000524288,
+    "speedup": 93.35578504193307,
+    "mem_savings": 4096.0
+  },
+  {
+    "method": "sparse-kv + INT8",
+    "ctx_len": 131072,
+    "top_k": 32,
+    "latency_ms": 0.006215949542820454,
+    "mem_gb": 0.000262144,
+    "speedup": 93.35578504193307,
+    "mem_savings": 16384.0
+  }
+]
