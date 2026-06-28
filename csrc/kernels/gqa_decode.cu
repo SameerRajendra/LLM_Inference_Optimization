@@ -39,7 +39,7 @@ __device__ __forceinline__ float warp_reduce_max(float v) {
 }
 
 // Block-level max reduction across NUM_WARPS warps
-__device__ float block_reduce_max(float val, float* smem_warp) {
+static __forceinline__ __device__ float block_reduce_max(float val, float* smem_warp) {
     int warp_id = threadIdx.x / WARP_SIZE;
     int lane_id = threadIdx.x % WARP_SIZE;
     val = warp_reduce_max(val);
@@ -51,7 +51,7 @@ __device__ float block_reduce_max(float val, float* smem_warp) {
 }
 
 // Block-level sum reduction
-__device__ float block_reduce_sum(float val, float* smem_warp) {
+static __forceinline__ __device__ float block_reduce_sum(float val, float* smem_warp) {
     int warp_id = threadIdx.x / WARP_SIZE;
     int lane_id = threadIdx.x % WARP_SIZE;
     val = warp_reduce_sum(val);

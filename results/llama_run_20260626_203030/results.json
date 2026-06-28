@@ -1,0 +1,43 @@
+{
+  "model": "meta-llama/Meta-Llama-3.1-8B",
+  "top_k": 32,
+  "timestamp": "20260626_203030",
+  "results": [
+    {
+      "ctx_len": 4096,
+      "mode": "dense",
+      "latency_ms": 12.976,
+      "speedup": 1.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "sparse-kv",
+      "latency_ms": 12.976,
+      "speedup": 1.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "dense",
+      "latency_ms": 14.003,
+      "speedup": 1.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "sparse-kv",
+      "latency_ms": 12.859,
+      "speedup": 1.089
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "dense",
+      "latency_ms": 27.33,
+      "speedup": 1.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "sparse-kv",
+      "latency_ms": 12.883,
+      "speedup": 2.121
+    }
+  ]
+}
