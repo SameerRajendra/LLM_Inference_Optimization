@@ -2,6 +2,12 @@
 
 **Sparse + quantized KV cache with fused CUDA eviction kernels — making 64K–128K context practical on a single GPU.**
 
+![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python)
+![CUDA](https://img.shields.io/badge/CUDA-12.1%2B-green?logo=nvidia)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.x-red?logo=pytorch)
+![License](https://img.shields.io/badge/License-MIT-brightgreen)
+![Status](https://img.shields.io/badge/Status-Active-brightgreen)
+
 Standard multi-head attention stores a KV cache that grows as O(n·d) per layer.
 At 128K tokens on a 7B-class model that is tens of gigabytes for the cache alone,
 and the decode step becomes entirely memory-bandwidth-bound.
@@ -11,9 +17,25 @@ kernel, and a JAX/Pallas reference path for cross-framework verification.
 
 ---
 
+## Skills Demonstrated
+
+| Domain | Technologies |
+|--------|-------------|
+| **CUDA / GPU Programming** | Custom CUDA kernels (`.cu`), warp-level primitives, shared memory tiling, NVTX ranges, Nsight Systems / Nsight Compute profiling |
+| **Systems ML** | KV cache eviction, sparse top-k attention, INT8/FP8 quantization, GQA decode, fused kernels |
+| **Distributed Training** | PyTorch FSDP (`ModuleWrapPolicy`), gradient checkpointing, NCCL all-reduce overlap, H200 NVLink multi-node tracing |
+| **Parameter-Efficient Fine-Tuning** | LoRA (rank=16, alpha=32) injected into Q/K/V/O projections; frozen base weights |
+| **Python / ML Stack** | PyTorch, Transformers (Llama-3-8B), pybind11 C++ extension, Triton, bitsandbytes, accelerate |
+| **Cross-Framework** | JAX/Pallas reference path for numerical verification against CUDA path |
+| **Tooling** | Makefile build system, `ninja` parallel CUDA compilation, `pytest`, `pyproject.toml` packaging |
+
+---
+
 ## Benchmark Results
 
-All numbers below are from a real run committed at
+All numbers are from the latest committed run at
+[`results/llama_run_20260628_233732/`](results/llama_run_20260628_233732/).
+Reference run used for README table:
 [`results/llama_run_20260626_235255/results.json`](results/llama_run_20260626_235255/results.json).
 Model: **Meta-Llama-3.1-8B**, decode step, batch=1, H=32, D=128, top-k=32.
 
@@ -31,7 +53,7 @@ Memory reduction is derived analytically from the benchmark code
 `KV_mem = tokens × heads × head_dim × dtype_bytes × 2 / 1e9`.
 At 64 K tokens with top-k=512 the sparse path reads `512/65536 = 0.78%` of the
 full KV cache; with INT8 quantization the effective memory saving is `ctx_len / top_k × 4`.
-Full per-run CSVs and PNGs are in `results/`.
+Full per-run CSVs and PNGs are in [`results/`](results/).
 
 ![Benchmark chart](results/llama_run_20260626_235255/llama_benchmark.png)
 
@@ -40,12 +62,12 @@ Full per-run CSVs and PNGs are in `results/`.
 ## Architecture
 
 ```
-sparse-kv-cuda_V2/
+LLM_Inference_Optimization/
 ├── csrc/
 │   ├── kernels/
-│   │   ├── sparse_attention.cu      # top-k sparse attention (6.3 KB)
-│   │   ├── kv_evict_quant.cu        # fused eviction + INT8/FP8 quant (11.8 KB)
-│   │   └── gqa_decode.cu            # grouped-query decode kernel (8.4 KB)
+│   │   ├── sparse_attention.cu      # top-k sparse attention (9.4 KB)
+│   │   ├── kv_evict_quant.cu        # fused eviction + INT8/FP8 quant (15.9 KB)
+│   │   └── gqa_decode.cu            # grouped-query decode kernel (12.2 KB)
 │   └── pybind/
 │       └── bindings.cpp             # pybind11 bridge to Python
 ├── sparse_kv/
@@ -54,8 +76,9 @@ sparse-kv-cuda_V2/
 │   └── eviction.py                  # fused_kv_evict() — eviction + optional INT8
 ├── jax_ref/                         # JAX/Pallas reference (in progress)
 ├── benchmarks/
-│   ├── run_benchmarks.py            # standalone kernel benchmark
-│   └── llama_integration_benchmark.py  # end-to-end Llama-3-8B benchmark
+│   ├── run_benchmarks.py            # standalone kernel benchmark (sweep 4K–128K)
+│   ├── llama_integration_benchmark.py  # end-to-end Llama-3-8B benchmark
+│   └── profile_fused_gqa.py        # fused GQA kernel profiling script
 ├── tests/
 │   ├── test_kernel_correctness.py
 │   └── test_reference.py
@@ -65,6 +88,9 @@ sparse-kv-cuda_V2/
 │   ├── fsdp_baseline.nsys-rep
 │   └── ifsdp_h200_nvlink_trace.nsys-rep   # H200 NVLink multi-node trace
 └── results/                         # committed benchmark output (CSV + JSON + PNG)
+    ├── llama_run_20260628_233732/   # latest run
+    ├── llama_run_20260626_235255/   # README reference run
+    └── ...                          # earlier runs (run1–run8, 5 additional llama runs)
 ```
 
 ### Sparse Attention Kernel
@@ -84,6 +110,13 @@ fused pass.
 The CUDA kernel recomputes QKᵀ internally so no pre-computed score tensor is
 needed on that path.
 Source: [`sparse_kv/eviction.py`](sparse_kv/eviction.py).
+
+### Grouped-Query Decode Kernel
+
+`csrc/kernels/gqa_decode.cu` implements a custom GQA decode kernel that maps multiple
+query heads to a shared set of KV heads, reducing memory pressure during the decode
+step for multi-head attention variants (e.g., Llama-3). The fused GQA kernel can be
+profiled standalone via [`benchmarks/profile_fused_gqa.py`](benchmarks/profile_fused_gqa.py).
 
 ### Distributed Training Harness
 
@@ -106,8 +139,8 @@ running the commands below).
 
 ```bash
 # 1. Clone
-git clone https://github.com/SameerRajendra/sparse-kv-cuda_V2.git
-cd sparse-kv-cuda_V2
+git clone https://github.com/SameerRajendra/LLM_Inference_Optimization.git
+cd LLM_Inference_Optimization
 
 # 2. Create venv + install Python deps + build CUDA extension
 make install          # wraps: pip install -r requirements.txt && pip install -e .
@@ -137,11 +170,14 @@ make bench-128k       # ctx=131072, top-k=512
 
 # Llama-3-8B end-to-end
 .venv/bin/python benchmarks/llama_integration_benchmark.py
+
+# Fused GQA kernel profile
+.venv/bin/python benchmarks/profile_fused_gqa.py
 ```
 
 Each run writes a timestamped `benchmark_<ts>.csv`, `benchmark_<ts>.json`, and
 `benchmark_<ts>.png` to the specified output directory.
-Committed results are in [`results/`](results/).
+Committed results (13 runs total) are in [`results/`](results/).
 
 ---
 
@@ -155,9 +191,10 @@ make profile-nsys     # writes profiles/nsys_report.nsys-rep
 make profile-ncu      # writes profiles/ncu_report.ncu-rep
 ```
 
-Committed profiles in [`profiles/`](profiles/):
-- `fsdp_baseline.nsys-rep` — single-node FSDP baseline
-- `ifsdp_h200_nvlink_trace.nsys-rep` — H200 NVLink multi-node trace (~6 MB)
+Committed profiles in [`profiles/`](profiles/) and [`results/`](results/):
+- `profiles/fsdp_baseline.nsys-rep` — single-node FSDP baseline
+- `profiles/ifsdp_h200_nvlink_trace.nsys-rep` — H200 NVLink multi-node trace (~6 MB)
+- `results/v3_system_profile_V2.nsys-rep` — full system profile V2 (~8.8 MB)
 
 ---
 
