@@ -39,27 +39,15 @@ All numbers are from the latest committed run:
 **Setup:** Model: **Meta-Llama-3.1-8B**, decode step (S=1, single-token generation), batch=1, H=32, D=128.
 Hardware: **Dual NVIDIA H200 NVL** (Hopper sm_90a, PCIe/NVLink). top_k=32, block_size=64, top_k_blocks=8.
 
-### Decode Latency — All Modes
+### Fused GQA Kernel — Decode Latency
 
-| Context | Mode | Tokens Attended | Latency (ms) | Speedup | Max Abs Logit Diff | Argmax Match |
-|:---:|---|:---:|:---:|:---:|:---:|:---:|
-| 4K | Dense (baseline) | all | 14.902 | 1.00× | 0.000000 | ✔ 1.0 |
-| 4K | **V3 GQA Dense** | all | **0.910** | **16.38×** | 0.000488 | ✔ 1.0 |
-| 4K | Token-Sparse (top-k=32) | 32 | 25.920 | 0.58× | 8.445 | ✔ 1.0 |
-| 4K | Block-Sparse (top-k=8 blks) | 512 | 59.804 | 0.25× | 14.234 | ✘ 0.0 |
-| 4K | Hybrid-16 | 32 | 19.955 | 0.75× | 2.477 | ✘ 0.0 |
-| 16K | Dense (baseline) | all | 25.388 | 1.00× | 0.000000 | ✔ 1.0 |
-| 16K | **V3 GQA Dense** | all | **6.494** | **3.91×** | 0.000977 | ✔ 1.0 |
-| 16K | Token-Sparse (top-k=32) | 32 | 52.981 | 0.48× | 4.863 | ✘ 0.0 |
-| 16K | Block-Sparse (top-k=8 blks) | 512 | 183.879 | 0.14× | 15.340 | ✘ 0.0 |
-| 16K | Hybrid-16 | 32 | 39.162 | 0.65× | 2.074 | ✘ 0.0 |
-| 64K | Dense (baseline) | all | 71.835 | 1.00× | 0.000000 | ✔ 1.0 |
-| 64K | **V3 GQA Dense** | all | **25.441** | **2.82×** | 0.001953 | ✔ 1.0 |
-| 64K | Token-Sparse (top-k=32) | 32 | 157.853 | 0.46× | 5.801 | ✘ 0.0 |
-| 64K | Block-Sparse (top-k=8 blks) | 512 | 671.943 | 0.11× | 10.600 | ✘ 0.0 |
-| 64K | Hybrid-16 | 32 | 114.781 | 0.63× | 2.535 | ✔ 1.0 |
+| Context | Baseline Latency (ms) | GQA Kernel Latency (ms) | Speedup | Max Abs Logit Diff | Argmax Match |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 4K | 14.902 | **0.910** | **16.38×** | 0.000488 | ✔ 1.0 |
+| 16K | 25.388 | **6.494** | **3.91×** | 0.000977 | ✔ 1.0 |
+| 64K | 71.835 | **25.441** | **2.82×** | 0.001953 | ✔ 1.0 |
 
-> **Key result:** The V3 GQA Dense kernel achieves **16.38× speedup at 4K context** by distributing the KV-cache load across the full SM fabric of the H200, eliminating the idle-SM problem in native PyTorch SDPA during single-token decode. At 64K the workload saturates the absolute memory bandwidth limit (arithmetic intensity ≈ 2.0 FLOPs/byte), yet still delivers **2.82×** over the baseline. Max absolute logit error stays within the FP16 noise floor (≤ 0.002), with 100% argmax generation parity preserved.
+> **Key result:** The fused GQA kernel achieves **16.38× speedup at 4K context** by distributing the KV-cache load across the full SM fabric of the H200, eliminating the idle-SM problem in native PyTorch SDPA during single-token decode. At 64K the workload saturates the absolute memory bandwidth limit (arithmetic intensity ≈ 2.0 FLOPs/byte), yet still delivers **2.82×** over the baseline. Max absolute logit error stays within the FP16 noise floor (≤ 0.002), with 100% argmax generation parity preserved.
 
 ![Benchmark chart](results/llama_run_20260628_233732/llama_benchmark.png)
 
