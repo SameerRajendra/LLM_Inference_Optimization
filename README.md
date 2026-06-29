@@ -128,12 +128,16 @@ LLM_Inference_Optimization/
 ├── train/
 │   └── train_fsdp_lora.py           # FSDP + LoRA multi-GPU training script
 ├── profiles/
-│   ├── fsdp_baseline.nsys-rep
-│   └── ifsdp_h200_nvlink_trace.nsys-rep   # H200 NVLink multi-node trace
+│   └── ifsdp_h200_nvlink_trace.nsys-rep   # H200 NVLink multi-node trace (~6 MB)
 └── results/                         # committed benchmark output (CSV + JSON + PNG)
     ├── llama_run_20260628_233732/   # latest run (results.json, layer_sweep.json, v3_layer_validation.json)
-    ├── llama_run_20260626_235255/   # prior reference run
-    └── ...                          # earlier runs (run1–run8, 5 additional llama runs)
+    ├── llama_run_20260628_183937/
+    ├── llama_run_20260626_235255/
+    ├── llama_run_20260626_203030/
+    ├── llama_run_20260625_182920/
+    ├── llama_run_20260625_182913/
+    ├── llama_run_20260625_182912/
+    └── run1/ … run8/                # earlier standalone kernel benchmark runs
 ```
 
 ### Sparse Attention Kernel
@@ -225,7 +229,7 @@ make bench-128k       # ctx=131072, top-k=512
 
 Each run writes a timestamped `results.csv`, `results.json`, `layer_sweep.json`, and
 `llama_benchmark.png` to the specified output directory.
-Committed results (13 runs total) are in [`results/`](results/).
+Committed results (15 runs total: 7 llama runs + run1–run8) are in [`results/`](results/).
 
 ---
 
@@ -240,7 +244,6 @@ make profile-ncu      # writes profiles/ncu_report.ncu-rep
 ```
 
 Committed profiles in [`profiles/`](profiles/) and [`results/`](results/):
-- `profiles/fsdp_baseline.nsys-rep` — single-node FSDP baseline
 - `profiles/ifsdp_h200_nvlink_trace.nsys-rep` — H200 NVLink multi-node trace (~6 MB)
 - `results/v3_system_profile_V2.nsys-rep` — full system profile V2 (~8.8 MB)
 
@@ -265,7 +268,7 @@ Core runtime (see [`requirements.txt`](requirements.txt) and [`pyproject.toml`](
 
 | Package | Pinned version |
 |---------|---------------|
-| `transformers` | 4.43.0 |
+| `transformers` | 4.44.2 |
 | `accelerate` | 0.33.0 |
 | `bitsandbytes` | 0.43.3 |
 | `numpy` | 1.26.4 |
