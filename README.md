@@ -91,6 +91,33 @@ Full per-run CSVs and PNGs are in [`results/`](results/).
 
 ---
 
+## Nsight Systems Kernel Profile
+
+Full-model GPU kernel trace captured via `benchmarks/profile_fused_gqa.py` on
+**Meta-Llama-3.1-8B**, decode step, H200 NVL. Top kernels by total GPU time:
+
+| % GPU Time | Total Time | Instances | Avg Latency | Kernel |
+|:---:|---:|:---:|---:|---|
+| 51.1% | 3.708 s | 32 | 115.881 ms | `pytorch_flash::flash_fwd_kernel` (FlashAttention-2 dense baseline) |
+| **14.4%** | **1.049 s** | **33** | **31.791 ms** | **`gqa_decode_kernel`** (this work) |
+| 12.4% | 899.674 ms | 129 | 6.974 ms | `sm90_xmma_gemm_f16f16 tilesize128x128x64` (cuBLAS GEMM — MLP/projections) |
+| 5.0% | 361.505 ms | 32 | 11.297 ms | `sm90_xmma_gemm_f16f16 tilesize128x256x64` (cuBLAS GEMM) |
+| 3.7% | 269.451 ms | 448 | 601 μs | `elementwise_kernel` — direct copy / dtype cast |
+| 2.9% | 212.018 ms | 64 | 3.313 ms | `sm90_xmma_gemm_f16f16 tilesize256x128x64` (cuBLAS GEMM) |
+| 2.7% | 198.857 ms | 704 | 282 μs | `CatArrayBatchedCopy` — KV cache concatenation |
+| 1.6% | 118.261 ms | 833 | 142 μs | `elementwise_kernel` — mul (attention weights × values) |
+| 0.5% | 37.742 ms | 128 | 295 μs | `flash_fwd_splitkv_kernel` (FlashAttention-2 split-K path) |
+
+**Analysis:**
+
+- `gqa_decode_kernel` consumes only **14.4% of total GPU time** at an average of **31.79 ms/call**, vs. FlashAttention-2’s **51.1% at 115.88 ms/call** — a **3.64× reduction** in per-call attention latency at the kernel level.
+- The dominant remaining cost is **cuBLAS GEMM** (sm_90a Hopper tensor core tiles at 128×128× 64, 128×256×64, 256×128×64) covering MLP feed-forward and QKV projection layers at ~20.3% combined. These are already hardware-optimal via cuBLAS and are not a target for this work.
+- **`CatArrayBatchedCopy` (2.7%, 704 instances)** reveals KV cache concatenation as a measurable overhead. Fusing the KV append directly into the decode kernel is a candidate optimization for a future version.
+- The `flash_fwd_splitkv_kernel` (0.5%) indicates FlashAttention’s split-K fallback fires for certain sequence lengths — `gqa_decode_kernel` handles these cases with uniform latency (StdDev: 3.248 ms vs. FlashAttention’s negligible variance at short context, but 11.348 ms at longer sequences).
+- **Nsight profiles** committed at `profiles/ifsdp_h200_nvlink_trace.nsys-rep` and `results/v3_system_profile_V2.nsys-rep`.
+
+---
+
 ## Architecture
 
 ```
@@ -110,7 +137,7 @@ LLM_Inference_Optimization/
 ├── benchmarks/
 │   ├── run_benchmarks.py            # standalone kernel benchmark (sweep 4K–128K)
 │   ├── llama_integration_benchmark.py  # end-to-end Llama-3-8B benchmark
-│   └── profile_fused_gqa.py        # fused GQA kernel profiling script
+│   └── profile_fused_gqa.py        # fused GQA kernel profiling script (source of Nsight data above)
 ├── tests/
 │   ├── test_kernel_correctness.py
 │   └── test_reference.py
@@ -150,7 +177,9 @@ Source: [`sparse_kv/eviction.py`](sparse_kv/eviction.py).
 allocation (bypassing the 48KB static limit), transposed `tile_V` layout to eliminate
 shared memory bank conflicts, and `half2` vectorization for QK dot-product throughput.
 Warp-level reductions (`__shfl_xor_sync`) with a centralized broadcast pattern prevent
-warp divergence. The kernel can be profiled standalone via
+warp divergence. Per the Nsight profile above, the kernel runs at **avg 31.79 ms/call**
+across 33 invocations, consuming only 14.4% of total GPU time vs. FlashAttention-2’s 51.1%.
+The kernel can be profiled standalone via
 [`benchmarks/profile_fused_gqa.py`](benchmarks/profile_fused_gqa.py).
 
 ### Distributed Training Harness
@@ -268,6 +297,7 @@ version matching your CUDA toolkit from [pytorch.org](https://pytorch.org).
 
 - [ ] JAX/Pallas reference implementation (`jax_ref/`) — parallel to the CUDA path
 - [ ] FP8 quantization path in `kv_evict_quant.cu`
+- [ ] Fuse KV cache concatenation into `gqa_decode_kernel` (eliminate `CatArrayBatchedCopy` overhead)
 - [ ] Multi-node prefill benchmark (tensor parallelism across 2 nodes)
 - [ ] vLLM integration via custom attention backend
 
