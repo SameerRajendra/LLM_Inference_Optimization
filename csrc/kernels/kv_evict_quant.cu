@@ -70,7 +70,7 @@ __device__ void online_softmax(float* scores, int k, float* warp_buf) {
 }
 
 // ─── per-lane register heap (min-replace) ───────────────────────────────────
-// FIX [P0-1]: original used a shared-memory per-warp heap written by all
+// original used a shared-memory per-warp heap written by all
 // lanes simultaneously — a shared memory write conflict with no sync.
 // Fix: each lane maintains its own heap in REGISTERS (private, no conflict),
 // then writes results to shared memory only once, after the scan is complete.
@@ -130,7 +130,7 @@ __global__ void sparse_kv_attn_kernel(
 
     int actual_k  = min(top_k, ctx_len);
 
-    // FIX [P0-2]: local_k is per-THREAD budget (not per-warp).
+    //  local_k is per-THREAD budget (not per-warp).
     // Each of BLOCK_THREADS threads holds ceil(actual_k / BLOCK_THREADS)
     // candidates in private register heaps.  local_k <= MAX_LANE_HEAP.
     int local_k = (actual_k + blockDim.x - 1) / blockDim.x;
@@ -176,7 +176,7 @@ __global__ void sparse_kv_attn_kernel(
     __syncthreads();
 
     // ── Step 2: per-lane register heap scan ──────────────────────────────
-    // FIX [P0-1]: each thread scans its private slice of tokens and
+    // each thread scans its private slice of tokens and
     // maintains a register heap — no shared memory writes during scan.
     float lane_scores[MAX_LANE_HEAP];
     int   lane_indices[MAX_LANE_HEAP];
@@ -202,10 +202,10 @@ __global__ void sparse_kv_attn_kernel(
     __syncthreads();
 
     // ── Step 3: warp 0 merges all per-thread heaps ───────────────────────
-    // FIX [P0-2]: merged_scores/indices now live in s_topk_scores/indices
+    // merged_scores/indices now live in s_topk_scores/indices
     // (shared memory) instead of per-thread stack VLAs — avoids 2 KB of
     // local memory (off-chip DRAM) per thread.
-    // FIX [P0-3]: merge_pos zero-initialised explicitly (not via = {0}).
+    // merge_pos zero-initialised explicitly (not via = {0}).
     if (warp_id == 0 && lane_id == 0) {
         // Total candidate pool: BLOCK_THREADS * local_k entries in s_lane_*
         int total_candidates = blockDim.x * MAX_LANE_HEAP;
@@ -247,14 +247,14 @@ __global__ void sparse_kv_attn_kernel(
         s_out_buf[d] = 0.f;
     __syncthreads();
 
-    // FIX [P1]: removed __syncthreads() from inside the loop.
+    // removed __syncthreads() from inside the loop.
     // Each thread writes only its own d-slots — no cross-thread conflict
     // within one iteration.  One barrier after the full loop is sufficient.
     for (int i = 0; i < actual_k; i++) {
         int   tok = s_topk_indices[i];
         float w   = s_topk_scores[i];
 
-        // FIX [P1]: guard against invalid indices from unfilled heap slots
+        // guard against invalid indices from unfilled heap slots
         if (tok < 0 || tok >= ctx_len) continue;
 
         const __half* vrow = v + tok * D;
@@ -322,7 +322,7 @@ torch::Tensor kv_evict_quant_forward(
     dim3 block(BLOCK_THREADS);
 
     // ── shared memory calculation ─────────────────────────────────────────
-    // FIX [P2]: use actual_k = min(top_k, ctx_len) for smem sizing,
+    //  use actual_k = min(top_k, ctx_len) for smem sizing,
     // not top_k — avoids over-allocation when ctx_len < top_k.
     int actual_k = min(top_k, ctx_len);
     size_t smem_bytes =
@@ -333,7 +333,7 @@ torch::Tensor kv_evict_quant_forward(
         actual_k           * sizeof(int)   +          // s_topk_indices
         D                  * sizeof(float);           // s_out_buf
 
-    // FIX [P2]: runtime shared memory limit check
+    // runtime shared memory limit check
     int device_id = Q.device().index();
     int max_smem  = 0;
     cudaDeviceGetAttribute(&max_smem,
@@ -362,8 +362,3 @@ torch::Tensor kv_evict_quant_forward(
 
     return Out;
 }
-
-// PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-//     m.def("kv_evict_quant_forward", &kv_evict_quant_forward,
-//           "Token-sparse KV attention forward (decode step, fp16, top-k eviction)");
-// }

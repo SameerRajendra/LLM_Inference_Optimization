@@ -57,7 +57,7 @@ __global__ void block_sparse_attn_kernel(
         for (int tok = start; tok < end; tok++) {
             float dot = 0.f;
 
-            // FIX P2: half2 vectorised dot product — 2× throughput
+            // half2 vectorised dot product — 2× throughput
             // Requires D to be even (guaranteed by transformer head dims)
             const __half* krow = k + tok * D;
             int d = 0;
@@ -79,7 +79,7 @@ __global__ void block_sparse_attn_kernel(
     __syncthreads();
 
     // ── Step 2: top-k selection (thread 0, min-heap replace) ────────────────
-    // FIX P0: replaced broken insertion sort with correct min-heap replacement.
+    // replaced broken insertion sort with correct min-heap replacement.
     // Maintains a max-heap of size actual_k by replacing the minimum element
     // whenever a higher score is found — O(num_blocks * actual_k) but correct.
     __shared__ float top_scores[MAX_BLOCKS_TOPK];
@@ -139,7 +139,7 @@ __global__ void block_sparse_attn_kernel(
     for (int i = tid; i < actual_k; i += WARP_SIZE)
         top_scores[i] /= global_sum;
 
-    // FIX P0: __syncthreads() BEFORE V accumulation reads top_scores.
+    //  __syncthreads() BEFORE V accumulation reads top_scores.
     // Without this, thread 0 reads top_scores[1..] before threads 1..
     // finish writing their normalised values — data race.
     __syncthreads();
@@ -167,7 +167,7 @@ __global__ void block_sparse_attn_kernel(
         // NOTE: no __syncthreads() inside loop — each thread owns
         // disjoint d-slots so no cross-thread write conflict per block.
     }
-    __syncthreads();   // FIX P1: one barrier after full accumulation, not per-block
+    __syncthreads();   //  one barrier after full accumulation, not per-block
 
     // Write output
     for (int d = tid; d < D; d += WARP_SIZE)
@@ -231,7 +231,7 @@ torch::Tensor sparse_attention_forward(
         block_scores.data_ptr<float>(),
         B, H, T, D, block_size, top_k_blocks, scale);
 
-    // FIX P1: synchronize in debug builds to catch runtime errors
+    //  synchronize in debug builds to catch runtime errors
 #ifdef DEBUG_KERNELS
     cudaDeviceSynchronize();
 #endif
@@ -242,8 +242,3 @@ torch::Tensor sparse_attention_forward(
 
     return Out;
 }
-
-// PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-//     m.def("sparse_attention_forward", &sparse_attention_forward,
-//           "Block-sparse attention forward (decode step, fp16)");
-// }

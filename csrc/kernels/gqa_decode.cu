@@ -1,18 +1,6 @@
 /*
  * gqa_decode.cu  —  FlashAttention-2 online softmax GQA decode kernel
  *
- * Fixes applied vs original:
- *   [P0-1] Q loaded into shared memory ONCE before tile loop (not re-read
- *          from global memory on every tile iteration)
- *   [P0-2] block_reduce_max/sum fixed: result written back to smem[0] and
- *          broadcast via smem read — all warps now see the correct value
- *   [P0-3] tile_max/tile_sum now valid for all warps (consequence of P0-2)
- *   [P1-4] Removed dead out_buf[HEAD_DIM] and unused q_val register
- *   [P1-5] Full input shape validation in launcher
- *   [P2-6] tile_V transposed to [HEAD_DIM][TILE_SIZE] — eliminates shared
- *          memory bank conflicts during V accumulation
- *   [P2-7] half2 vectorized dot product — 2x throughput on QK scoring
- *
  * Layout:
  *   Q   [B, Hq,  D]        fp16   — decode step (seq_len = 1)
  *   K   [B, N,  Hkv, D]   fp16
@@ -54,10 +42,6 @@ __device__ __forceinline__ float warp_reduce_max(float v) {
 }
 
 // ─── block reductions ────────────────────────────────────────────────────────
-// FIX [P0-2]: original used __shfl_sync(FULL_MASK, val, 0) to broadcast,
-// which only broadcasts within each warp — warps 1-3 received -FLT_MAX
-// instead of the true global max/sum.
-// Fix: warp 0 writes result to smem[0], then ALL threads read smem[0].
 
 __device__ __forceinline__ float block_reduce_max(float val, float* smem_warp) {
     int warp_id = threadIdx.x / WARP_SIZE;
@@ -121,7 +105,7 @@ extern "C" __global__ void gqa_decode_kernel(
     // scores  [TILE_SIZE]             — exp(score - max) per token in tile
     // warp_buf[NUM_WARPS]             — block reduction scratch
     //
-    // FIX [P1-4]: removed dead out_buf[HEAD_DIM] (allocated but never used)
+
     __shared__ __half tile_Q[HEAD_DIM];
     __shared__ float  scores[TILE_SIZE];
     __shared__ float  warp_buf[NUM_WARPS];
@@ -177,8 +161,7 @@ extern "C" __global__ void gqa_decode_kernel(
         __syncthreads();
 
         // ── compute dot(Q, K[tid]) for token tid in this tile ─────────────────
-        // FIX [P2-7]: half2 vectorized — 2x throughput vs scalar loop
-        // FIX [P0-1]: uses tile_Q (shared) not global Q
+       
         float score = -FLT_MAX;
         if (tid < tile_tokens) {
             float dot = 0.f;
@@ -196,7 +179,7 @@ extern "C" __global__ void gqa_decode_kernel(
         __syncthreads();
 
         // ── online softmax update ─────────────────────────────────────────────
-        // FIX [P0-2/P0-3]: block_reduce_max now correct for all warps —
+        // block_reduce_max now correct for all warps —
         // warps 1-3 previously received -FLT_MAX, causing them to never
         // update running_max and accumulate V with wrong weights.
         float tile_max = block_reduce_max(scores[tid], warp_buf);
@@ -216,7 +199,7 @@ extern "C" __global__ void gqa_decode_kernel(
         running_sum = running_sum * rescale + tile_sum;
 
         // ── accumulate weighted V for channel tid ─────────────────────────────
-        // FIX [P2-6]: tile_V[tid][t] is row access — no bank conflict
+        // tile_V[tid][t] is row access — no bank conflict
         // Original tile_V[t][tid] was column access — bank conflict every iter
         acc *= rescale;
         #pragma unroll 8
@@ -238,7 +221,7 @@ torch::Tensor launch_fused_gqa(
     torch::Tensor V,    // [B, N, Hkv, D]  fp16
     double scale)
 {
-    // FIX [P1-5]: full input validation
+    // full input validation
     TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(),
                 "Q/K/V must be CUDA tensors");
     TORCH_CHECK(Q.dtype() == torch::kFloat16 &&
@@ -306,7 +289,3 @@ torch::Tensor launch_fused_gqa(
     return Out;
 }
 
-// PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-//     m.def("launch_fused_gqa", &launch_fused_gqa,
-//           "FlashAttention-2 GQA decode kernel (fp16, online softmax)");
-// }

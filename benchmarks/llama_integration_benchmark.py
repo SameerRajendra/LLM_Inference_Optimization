@@ -3,17 +3,6 @@ Llama-3.1-8B sparse KV cache integration benchmark.
 Hooks kv_evict_quant_forward (token-sparse) and sparse_attention_forward
 (block-sparse) into attention layers and measures logit quality + latency
 vs dense SDPA at configurable context lengths.
-
-Fixes applied vs original:
-  [P0-1] clone_cache() prevents KV cache mutation across benchmark iters
-  [P0-2] is_causal=(S>1) for prefill in sparse_forward fallback path
-  [P0-3] compare_next_token_logits now clones both caches before use
-  [P0-4] decode fallback passes attn_mask=None to SDPA (avoids shape errors)
-  [P1-5] token budget normalization documented; tokens_attended added to records
-  [P1-6] benchmark_latency uses clone_cache so iters are independent
-  [P2-7] restore_attention is idempotent; del _orig_forward after restore
-  [NEW]  sparse_layers param for hybrid layer policy (e.g. first 16 sparse)
-  [NEW]  per-run argmax sweep helper for layer sensitivity experiment
 """
 
 from __future__ import annotations
@@ -207,20 +196,13 @@ def patch_attention(
                 ).to(Q.dtype)
 
             else:
-                # Fix [P0-4]: decode fallback — pass attn_mask=None.
-                # The raw Transformers attention_mask is shaped [B, ctx_len]
-                # (int) and is incompatible with SDPA's expected float mask
-                # of shape [B, H, 1, ctx_len].  For decode with a full KV
-                # cache there is no padding to mask, so None is correct.
+                
                 attn_out = F.scaled_dot_product_attention(
                     Q, K, V, attn_mask=None, is_causal=False
                 )
         else:
             # ── prefill: always dense + causal ────────────────────────────
-            # Fix [P0-2]: is_causal must be True during prefill so that
-            # each token only attends to prior tokens.  is_causal=False
-            # (original bug) makes every token attend to future tokens,
-            # corrupting the KV cache for all subsequent decode steps.
+            
             attn_out = F.scaled_dot_product_attention(
                 Q, K, V,
                 attn_mask=None,
@@ -308,9 +290,6 @@ def benchmark_v3_latency(
     Benchmark launch_fused_gqa directly on raw Q/K/V tensors extracted
     from the first layer — measures pure kernel latency, not model overhead.
 
-    This gives the apples-to-apples comparison:
-        v3 (gqa_decode_kernel) vs v2 (sparse_kv_attn_kernel)
-    both measured as time-per-decode-step on the same KV cache.
     """
     cfg   = model.config
     D     = cfg.hidden_size // cfg.num_attention_heads
@@ -352,11 +331,6 @@ def benchmark_latency(
 ) -> float:
     """
     Measure mean decode latency in ms.
-
-    Fix [P1-6]: each iteration clones past_kv_ref so the cache never
-    grows — every iteration measures a single decode step on a cache
-    of exactly ctx_len tokens, making all iterations independent and
-    comparably fast.
     """
     def _step():
         with torch.no_grad():
@@ -388,8 +362,6 @@ def compare_logits(
     """
     Compare one decode step: dense logits vs sparse logits.
 
-    Fix [P0-3]: both caches are cloned before use — the reference
-    prefill caches are never mutated by this function.
     """
     # Dense logits
     restore_attention(model)
@@ -428,11 +400,6 @@ def compare_gqa_vs_sdpa(
     """
     Validate launch_fused_gqa against PyTorch SDPA.
 
-    Hook-free approach:
-      1. Run one dense decode step to get hidden states via a simple
-         output capture on the DECODER LAYER (not attention submodule)
-      2. Re-run QKV projections on captured hidden states
-      3. Compare v3 vs SDPA on those exact tensors
     """
     cfg   = model.config
     Hq    = cfg.num_attention_heads
@@ -441,8 +408,6 @@ def compare_gqa_vs_sdpa(
     scale = 1.0 / (D ** 0.5)
 
     # ── Step 1: capture hidden states entering each attention layer ───────
-    # Hook on decoder_layer INPUT (not self_attn) — decoder_layer always
-    # receives (hidden_states, ...) as positional args[0]
     hidden_states_per_layer = {}
 
     def make_layer_hook(layer_idx):
@@ -470,7 +435,7 @@ def compare_gqa_vs_sdpa(
         h.remove()
 
     if not hidden_states_per_layer:
-        # hooks fired but nothing captured — try positional fallback below
+        
         return _compare_gqa_fallback(model, new_token, past_kv_ref,
                                      Hq, Hkv, D, scale, atol)
 
@@ -548,7 +513,6 @@ def _compare_gqa_fallback(model, new_token, past_kv_ref,
     prefill cache directly — no hooks, no forward pass needed.
     Sufficient to confirm the kernel is numerically correct.
     """
-    print("  ⚠️  Hook capture failed — running layer-0 fallback validation")
 
     cache  = clone_cache(past_kv_ref)
     attn   = model.model.layers[0].self_attn
@@ -670,11 +634,11 @@ def run():
     out_dir   = f"results/llama_run_{timestamp}"
     os.makedirs(out_dir, exist_ok=True)
     records        = []
-    v3_validations = []   # [NEW] collect per-ctx v3 validation detail
+    v3_validations = []   # collect per-ctx v3 validation detail
 
     eff_token_budget = {
         "dense":         None,
-        "v3-gqa-dense":  None,   # [NEW] full attention, custom kernel
+        "v3-gqa-dense":  None,   #  full attention, custom kernel
         "token-sparse":  TOP_K,
         "block-sparse":  TOP_K_BLOCKS * BLOCK_SIZE,
     }
@@ -700,7 +664,7 @@ def run():
         past_kv_dense  = prefill(model, input_ids)
         past_kv_sparse = prefill(model, input_ids)
 
-        # ── [NEW] v3 numerical validation — must pass before latency ──────
+        # ── v3 numerical validation — must pass before latency ──────
         # v3 is the DENSE GQA custom kernel; it should match PyTorch SDPA
         # to within FP16 rounding error (max_abs_error < 0.05).
         # If it fails here, the block_reduce fix in gqa_decode.cu is wrong.
@@ -724,7 +688,7 @@ def run():
         dense_lat = benchmark_latency_no_clone(model, new_token, past_kv_dense_lat)
         del past_kv_dense_lat
 
-        # ── [NEW] v3 kernel latency (raw kernel, not full model forward) ──
+        # ──v3 kernel latency (raw kernel, not full model forward) ──
         # Measured on layer-0 KV tensors — representative of all layers
         # since all have identical shape at decode step.
         v3_lat = benchmark_v3_latency(model, new_token, past_kv_dense)
@@ -770,7 +734,7 @@ def run():
             ("dense",
              dense_lat,  1.0,
              0.0,                                    1.0),
-            # [NEW] v3 row — mean_diff = max_abs_error vs SDPA
+            # v3 row — mean_diff = max_abs_error vs SDPA
             ("v3-gqa-dense",
              v3_lat,     dense_lat / v3_lat,
              v3_validation["max_abs_error"],         1.0),
@@ -791,7 +755,7 @@ def run():
         # ── records ───────────────────────────────────────────────────────
         mode_metrics = {
             "dense":        ({},             dense_lat),
-            # [NEW]
+            # v3 row — mean_diff = max_abs_error vs SDPA
             "v3-gqa-dense": ({"mean_abs_logit_diff": v3_validation["max_abs_error"],
                                "max_abs_logit_diff":  v3_validation["max_abs_error"],
                                "argmax_match":        1.0},   v3_lat),
@@ -816,7 +780,7 @@ def run():
 
     save_results(records, TOP_K, out_dir=out_dir)
 
-    # ── [NEW] save v3 per-layer validation detail ─────────────────────────
+    # ── save v3 per-layer validation detail ─────────────────────────
     v3_detail_path = f"{out_dir}/v3_layer_validation.json"
     with open(v3_detail_path, "w") as f:
         json.dump(v3_validations, f, indent=2)
@@ -880,7 +844,7 @@ def save_results(records, top_k, out_dir, model_id=MODEL_ID):
         return [r["speedup"] for r in records if r["mode"] == mode]
 
     dense_lats   = lats("dense")
-    v3_lats      = lats("v3-gqa-dense")   # [NEW]
+    v3_lats      = lats("v3-gqa-dense")   
     token_lats   = lats("token-sparse")
     block_lats   = lats("block-sparse")
     hybrid_lats  = lats("hybrid-16")
@@ -888,9 +852,9 @@ def save_results(records, top_k, out_dir, model_id=MODEL_ID):
     token_su  = speedups("token-sparse")
     block_su  = speedups("block-sparse")
     hybrid_su = speedups("hybrid-16")
-    v3_su     = speedups("v3-gqa-dense")  # [NEW]
+    v3_su     = speedups("v3-gqa-dense")  
 
-    # [NEW] 3 subplots: latency bars | speedup lines | v3 error
+    # 3 subplots: latency bars | speedup lines | v3 error
     fig, axes = plt.subplots(1, 3, figsize=(21, 5))
     fig.suptitle(
         f"sparse-kv-cuda · Llama-3.1-8B · top_k={top_k} | "
@@ -899,10 +863,10 @@ def save_results(records, top_k, out_dir, model_id=MODEL_ID):
     )
 
     x = np.arange(len(ctx_lens))
-    w = 0.15   # [NEW] narrower to fit 5 bars
+    w = 0.15   # narrower to fit 5 bars
     colors = {
         "dense":  "#4e79a7",
-        "v3":     "#76b7b2",   # [NEW]
+        "v3":     "#76b7b2",   # 
         "token":  "#f28e2b",
         "block":  "#59a14f",
         "hybrid": "#e15759",
@@ -931,7 +895,7 @@ def save_results(records, top_k, out_dir, model_id=MODEL_ID):
 
     # ── subplot 1: speedup lines ──────────────────────────────────────────
     axes[1].plot(ctx_lens, v3_su,     marker="D", color=colors["v3"],
-                 linewidth=2.5, markersize=8, label="V3 GQA Dense")   # [NEW]
+                 linewidth=2.5, markersize=8, label="V3 GQA Dense")   
     axes[1].plot(ctx_lens, token_su,  marker="o", color=colors["token"],
                  linewidth=2.5, markersize=8, label="Token-Sparse")
     axes[1].plot(ctx_lens, block_su,  marker="s", color=colors["block"],
@@ -958,7 +922,7 @@ def save_results(records, top_k, out_dir, model_id=MODEL_ID):
                          textcoords="offset points",
                          xytext=(0, offset), ha="center", fontsize=8)
 
-    # ── subplot 2: [NEW] v3 numerical error vs context length ────────────
+    # ── subplot 2: v3 numerical error vs context length ────────────
     # Shows max_abs_error of v3 vs SDPA — should be < 0.05 (FP16 noise floor)
     # If it spikes, the block_reduce fix failed or smem limit was hit.
     v3_errors = [r["max_abs_logit_diff"]

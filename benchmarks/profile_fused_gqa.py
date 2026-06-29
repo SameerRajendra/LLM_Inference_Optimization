@@ -180,8 +180,7 @@ def patch_attention(
 def restore_attention(model) -> int:
     """
     Restore all patched attention layers to their original forward.
-    Fix [P2-7]: deletes _orig_forward after restore so the function
-    is idempotent — calling it twice does not double-restore.
+    
     """
     restored = 0
     for layer in model.model.layers:
