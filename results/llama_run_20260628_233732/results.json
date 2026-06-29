@@ -1,0 +1,159 @@
+{
+  "model": "meta-llama/Llama-3.1-8B",
+  "top_k": 32,
+  "block_size": 64,
+  "top_k_blocks": 8,
+  "timestamp": "20260628_233732",
+  "results": [
+    {
+      "ctx_len": 4096,
+      "mode": "dense",
+      "tokens_attended": null,
+      "latency_ms": 14.902,
+      "speedup": 1.0,
+      "mean_abs_logit_diff": 0.0,
+      "max_abs_logit_diff": 0.0,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "v3-gqa-dense",
+      "tokens_attended": null,
+      "latency_ms": 0.91,
+      "speedup": 16.378,
+      "mean_abs_logit_diff": 0.000488,
+      "max_abs_logit_diff": 0.000488,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "token-sparse",
+      "tokens_attended": 32,
+      "latency_ms": 25.92,
+      "speedup": 0.575,
+      "mean_abs_logit_diff": 1.703827,
+      "max_abs_logit_diff": 8.445312,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "block-sparse",
+      "tokens_attended": 512,
+      "latency_ms": 59.804,
+      "speedup": 0.249,
+      "mean_abs_logit_diff": 1.726964,
+      "max_abs_logit_diff": 14.234375,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "hybrid-16",
+      "tokens_attended": 32,
+      "latency_ms": 19.955,
+      "speedup": 0.747,
+      "mean_abs_logit_diff": 0.640786,
+      "max_abs_logit_diff": 2.476562,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "dense",
+      "tokens_attended": null,
+      "latency_ms": 25.388,
+      "speedup": 1.0,
+      "mean_abs_logit_diff": 0.0,
+      "max_abs_logit_diff": 0.0,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "v3-gqa-dense",
+      "tokens_attended": null,
+      "latency_ms": 6.494,
+      "speedup": 3.91,
+      "mean_abs_logit_diff": 0.000977,
+      "max_abs_logit_diff": 0.000977,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "token-sparse",
+      "tokens_attended": 32,
+      "latency_ms": 52.981,
+      "speedup": 0.479,
+      "mean_abs_logit_diff": 1.143708,
+      "max_abs_logit_diff": 4.863281,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "block-sparse",
+      "tokens_attended": 512,
+      "latency_ms": 183.879,
+      "speedup": 0.138,
+      "mean_abs_logit_diff": 1.845818,
+      "max_abs_logit_diff": 15.339783,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "hybrid-16",
+      "tokens_attended": 32,
+      "latency_ms": 39.162,
+      "speedup": 0.648,
+      "mean_abs_logit_diff": 0.567815,
+      "max_abs_logit_diff": 2.074219,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "dense",
+      "tokens_attended": null,
+      "latency_ms": 71.835,
+      "speedup": 1.0,
+      "mean_abs_logit_diff": 0.0,
+      "max_abs_logit_diff": 0.0,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "v3-gqa-dense",
+      "tokens_attended": null,
+      "latency_ms": 25.441,
+      "speedup": 2.824,
+      "mean_abs_logit_diff": 0.001953,
+      "max_abs_logit_diff": 0.001953,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "token-sparse",
+      "tokens_attended": 32,
+      "latency_ms": 157.853,
+      "speedup": 0.455,
+      "mean_abs_logit_diff": 1.149221,
+      "max_abs_logit_diff": 5.800781,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "block-sparse",
+      "tokens_attended": 512,
+      "latency_ms": 671.943,
+      "speedup": 0.107,
+      "mean_abs_logit_diff": 1.569967,
+      "max_abs_logit_diff": 10.599609,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "hybrid-16",
+      "tokens_attended": 32,
+      "latency_ms": 114.781,
+      "speedup": 0.626,
+      "mean_abs_logit_diff": 0.716628,
+      "max_abs_logit_diff": 2.535156,
+      "argmax_match": 1.0
+    }
+  ]
+}

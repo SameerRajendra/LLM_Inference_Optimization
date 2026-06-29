@@ -1,0 +1,38 @@
+[
+  {
+    "n_sparse_layers": 1,
+    "mean_abs_logit_diff": 0.0703616812825203,
+    "max_abs_logit_diff": 0.779296875,
+    "argmax_match": 1.0
+  },
+  {
+    "n_sparse_layers": 2,
+    "mean_abs_logit_diff": 0.1281590610742569,
+    "max_abs_logit_diff": 1.173828125,
+    "argmax_match": 1.0
+  },
+  {
+    "n_sparse_layers": 4,
+    "mean_abs_logit_diff": 0.11221354454755783,
+    "max_abs_logit_diff": 1.0234375,
+    "argmax_match": 1.0
+  },
+  {
+    "n_sparse_layers": 8,
+    "mean_abs_logit_diff": 0.10234628617763519,
+    "max_abs_logit_diff": 0.59765625,
+    "argmax_match": 1.0
+  },
+  {
+    "n_sparse_layers": 16,
+    "mean_abs_logit_diff": 0.41021743416786194,
+    "max_abs_logit_diff": 2.2802734375,
+    "argmax_match": 1.0
+  },
+  {
+    "n_sparse_layers": 32,
+    "mean_abs_logit_diff": 0.904560387134552,
+    "max_abs_logit_diff": 6.3828125,
+    "argmax_match": 0.0
+  }
+]

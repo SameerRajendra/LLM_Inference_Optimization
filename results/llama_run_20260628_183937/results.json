@@ -1,0 +1,88 @@
+{
+  "model": "meta-llama/Meta-Llama-3.1-8B",
+  "top_k": 32,
+  "timestamp": "20260628_183937",
+  "results": [
+    {
+      "ctx_len": 4096,
+      "mode": "dense",
+      "latency_ms": 18.333,
+      "speedup": 1.0,
+      "mean_abs_logit_diff": 0.0,
+      "max_abs_logit_diff": 0.0,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "token-sparse",
+      "latency_ms": 24.995,
+      "speedup": 0.733,
+      "mean_abs_logit_diff": 1.22749,
+      "max_abs_logit_diff": 4.600586,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "block-sparse",
+      "latency_ms": 60.518,
+      "speedup": 0.303,
+      "mean_abs_logit_diff": 2.105934,
+      "max_abs_logit_diff": 15.886719,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "dense",
+      "latency_ms": 28.919,
+      "speedup": 1.0,
+      "mean_abs_logit_diff": 0.0,
+      "max_abs_logit_diff": 0.0,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "token-sparse",
+      "latency_ms": 69.333,
+      "speedup": 0.417,
+      "mean_abs_logit_diff": 1.110679,
+      "max_abs_logit_diff": 10.074219,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "block-sparse",
+      "latency_ms": 191.376,
+      "speedup": 0.151,
+      "mean_abs_logit_diff": 1.919763,
+      "max_abs_logit_diff": 17.650391,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "dense",
+      "latency_ms": 86.527,
+      "speedup": 1.0,
+      "mean_abs_logit_diff": 0.0,
+      "max_abs_logit_diff": 0.0,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "token-sparse",
+      "latency_ms": 240.585,
+      "speedup": 0.36,
+      "mean_abs_logit_diff": 1.032087,
+      "max_abs_logit_diff": 7.342773,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "block-sparse",
+      "latency_ms": 703.119,
+      "speedup": 0.123,
+      "mean_abs_logit_diff": 1.943132,
+      "max_abs_logit_diff": 15.908203,
+      "argmax_match": 0.0
+    }
+  ]
+}

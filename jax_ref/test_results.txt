@@ -1,0 +1,21 @@
+============================= test session starts ==============================
+platform linux -- Python 3.9.18, pytest-8.4.2, pluggy-1.6.0 -- /mmfs1/home/srajendr1/sparse-kv-cuda/.venv/bin/python3.9
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /mmfs1/home/srajendr1/sparse-kv-cuda
+configfile: pyproject.toml
+plugins: benchmark-5.2.3
+collecting ... collected 10 items
+
+jax_ref/test_pallas.py::TestReference::test_output_shape PASSED          [ 10%]
+jax_ref/test_pallas.py::TestReference::test_dtype_preserved_fp16 PASSED  [ 20%]
+jax_ref/test_pallas.py::TestReference::test_output_finite PASSED         [ 30%]
+jax_ref/test_pallas.py::TestReference::test_deterministic PASSED         [ 40%]
+jax_ref/test_pallas.py::TestReference::test_non_multiple_seqlen PASSED   [ 50%]
+jax_ref/test_pallas.py::TestReference::test_top_k_clipped_to_num_blocks PASSED [ 60%]
+jax_ref/test_pallas.py::TestPallasVsReference::test_numerical_agreement[256-64-4] PASSED [ 70%]
+jax_ref/test_pallas.py::TestPallasVsReference::test_numerical_agreement[1024-64-8] PASSED [ 80%]
+jax_ref/test_pallas.py::TestPallasVsReference::test_numerical_agreement[4096-64-16] PASSED [ 90%]
+jax_ref/test_pallas.py::TestJaxVsPyTorchReference::test_both_finite PASSED [100%]
+
+============================= 10 passed in 12.97s ==============================
