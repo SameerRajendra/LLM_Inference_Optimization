@@ -51,23 +51,6 @@ Hardware: **Dual NVIDIA H200 NVL** (Hopper sm_90a, PCIe/NVLink). top_k=32, block
 
 ![Benchmark chart](results/llama_run_20260628_233732/llama_benchmark.png)
 
-### Hybrid Sparse Layer Sweep
-
-Layers are progressively converted from Dense GQA → Sparse Eviction to find the empirical safety limit.
-Data from [`results/llama_run_20260628_233732/layer_sweep.json`](results/llama_run_20260628_233732/layer_sweep.json),
-collected at ctx=4096, top_k=32.
-
-| Sparse Layers | Mean Abs Logit Diff | Max Abs Logit Diff | Argmax Match |
-|:---:|:---:|:---:|:---:|
-| 1 | 0.0704 | 0.779 | ✔ 1.0 |
-| 2 | 0.1282 | 1.174 | ✔ 1.0 |
-| 4 | 0.1122 | 1.023 | ✔ 1.0 |
-| **8** | **0.1023** | **0.598** | **✔ 1.0** |
-| 16 | 0.4102 | 2.280 | ✔ 1.0 |
-| 32 | 0.9046 | 6.383 | ✘ 0.0 |
-
-> **Safe operating range:** Exact generation parity (argmax_match = 1.0) is maintained up to **all 16 sparse layers**. Applying sparsity to all 32 layers collapses predictive stability (argmax_match = 0.0, max error = 6.38), establishing an empirical upper limit for safe KV cache eviction without model fine-tuning.
-
 ### Memory Reduction (Analytical)
 
 Memory savings are computed from the `mem_gb` function in
