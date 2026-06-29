@@ -41,11 +41,11 @@ Hardware: **Dual NVIDIA H200 NVL** (Hopper sm_90a, PCIe/NVLink). top_k=32, block
 
 ### Fused GQA Kernel — Decode Latency
 
-| Context | Baseline Latency (ms) | GQA Kernel Latency (ms) | Speedup | Max Abs Logit Diff | Argmax Match |
-|:---:|:---:|:---:|:---:|:---:|:---:|
-| 4K | 14.902 | **0.910** | **16.38×** | 0.000488 | ✔ 1.0 |
-| 16K | 25.388 | **6.494** | **3.91×** | 0.000977 | ✔ 1.0 |
-| 64K | 71.835 | **25.441** | **2.82×** | 0.001953 | ✔ 1.0 |
+| Context | Baseline Latency (ms) | GQA Kernel Latency (ms) | Max Abs Logit Diff | Argmax Match |
+|:---:|:---:|:---:|:---:|:---:|
+| 4K | 14.902 | **0.910** | 0.000488 | ✔ 1.0 |
+| 16K | 25.388 | **6.494** | 0.000977 | ✔ 1.0 |
+| 64K | 71.835 | **25.441** |  0.001953 | ✔ 1.0 |
 
 > **Key result:** The fused GQA kernel achieves **16.38× speedup at 4K context** by distributing the KV-cache load across the full SM fabric of the H200, eliminating the idle-SM problem in native PyTorch SDPA during single-token decode. At 64K the workload saturates the absolute memory bandwidth limit (arithmetic intensity ≈ 2.0 FLOPs/byte), yet still delivers **2.82×** over the baseline. Max absolute logit error stays within the FP16 noise floor (≤ 0.002), with 100% argmax generation parity preserved.
 
