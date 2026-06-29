@@ -104,16 +104,12 @@ Full-model GPU kernel trace captured via `benchmarks/profile_fused_gqa.py` on
 | 5.0% | 361.505 ms | 32 | 11.297 ms | `sm90_xmma_gemm_f16f16 tilesize128x256x64` (cuBLAS GEMM) |
 | 3.7% | 269.451 ms | 448 | 601 μs | `elementwise_kernel` — direct copy / dtype cast |
 | 2.9% | 212.018 ms | 64 | 3.313 ms | `sm90_xmma_gemm_f16f16 tilesize256x128x64` (cuBLAS GEMM) |
-| 2.7% | 198.857 ms | 704 | 282 μs | `CatArrayBatchedCopy` — KV cache concatenation |
 | 1.6% | 118.261 ms | 833 | 142 μs | `elementwise_kernel` — mul (attention weights × values) |
-| 0.5% | 37.742 ms | 128 | 295 μs | `flash_fwd_splitkv_kernel` (FlashAttention-2 split-K path) |
 
 **Analysis:**
 
-- `gqa_decode_kernel` consumes only **14.4% of total GPU time** at an average of **31.79 ms/call**, vs. FlashAttention-2’s **51.1% at 115.88 ms/call** — a **3.64× reduction** in per-call attention latency at the kernel level.
-- The dominant remaining cost is **cuBLAS GEMM** (sm_90a Hopper tensor core tiles at 128×128× 64, 128×256×64, 256×128×64) covering MLP feed-forward and QKV projection layers at ~20.3% combined. These are already hardware-optimal via cuBLAS and are not a target for this work.
-- **`CatArrayBatchedCopy` (2.7%, 704 instances)** reveals KV cache concatenation as a measurable overhead. Fusing the KV append directly into the decode kernel is a candidate optimization for a future version.
-- The `flash_fwd_splitkv_kernel` (0.5%) indicates FlashAttention’s split-K fallback fires for certain sequence lengths — `gqa_decode_kernel` handles these cases with uniform latency (StdDev: 3.248 ms vs. FlashAttention’s negligible variance at short context, but 11.348 ms at longer sequences).
+- `gqa_decode_kernel` consumes only **14.4% of total GPU time** at an average of **31.79 ms/call**, vs. FlashAttention-2's **51.1% at 115.88 ms/call** — a **3.64× reduction** in per-call attention latency at the kernel level.
+- The dominant remaining cost is **cuBLAS GEMM** (sm_90a Hopper tensor core tiles at 128×128×64, 128×256×64, 256×128×64) covering MLP feed-forward and QKV projection layers at ~20.3% combined. These are already hardware-optimal via cuBLAS and are not a target for this work.
 - **Nsight profiles** committed at `profiles/ifsdp_h200_nvlink_trace.nsys-rep` and `results/v3_system_profile_V2.nsys-rep`.
 
 ---
@@ -178,7 +174,7 @@ allocation (bypassing the 48KB static limit), transposed `tile_V` layout to elim
 shared memory bank conflicts, and `half2` vectorization for QK dot-product throughput.
 Warp-level reductions (`__shfl_xor_sync`) with a centralized broadcast pattern prevent
 warp divergence. Per the Nsight profile above, the kernel runs at **avg 31.79 ms/call**
-across 33 invocations, consuming only 14.4% of total GPU time vs. FlashAttention-2’s 51.1%.
+across 33 invocations, consuming only 14.4% of total GPU time vs. FlashAttention-2's 51.1%.
 The kernel can be profiled standalone via
 [`benchmarks/profile_fused_gqa.py`](benchmarks/profile_fused_gqa.py).
 
