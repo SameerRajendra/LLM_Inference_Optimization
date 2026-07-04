@@ -1,23 +1,35 @@
 /*
- * gqa_decode.cu  —  FlashAttention-2 online softmax GQA decode kernel
+ * gqa_decode.cu  —  Split-KV (FlashDecoding-style) GQA decode kernel
  *
  * Layout:
  *   Q   [B, Hq,  D]        fp16   — decode step (seq_len = 1)
- *   K   [B, N,  Hkv, D]   fp16
- *   V   [B, N,  Hkv, D]   fp16
+ *   K   [B, N,   Hkv, D]   fp16
+ *   V   [B, N,   Hkv, D]   fp16
  *   Out [B, Hq,  D]        fp16
  *
- * Tiling:
- *   grid  (Hq, B)
- *   block BLOCK_THREADS = HEAD_DIM = 128 threads
- *   Each thread owns one output channel (tid = channel index)
- *   Tiles over KV sequence in chunks of TILE_SIZE tokens
+ * Why split-KV:
+ *   The previous version launched grid = (Hq, B) = 32 blocks for Llama-3.1-8B
+ *   decode (batch 1). On a 132-SM H100 that leaves ~76% of the GPU idle, and
+ *   each block serially walks the ENTIRE KV sequence for one head — so decode
+ *   latency scales ~O(N) with almost no parallelism. That is why it measured
+ *   ~3.6x SLOWER than FlashAttention.
+ *
+ *   FlashDecoding fix: partition the KV sequence into `num_splits` chunks and
+ *   launch grid = (Hq, num_splits, B). Each block attends only its chunk and
+ *   emits a PARTIAL result — the unnormalized output plus the online-softmax
+ *   state (running max m and running sum l). A second `combine` kernel merges
+ *   the partials per head with the exact log-sum-exp rescale. This fills all
+ *   SMs and cuts each block's serial work to O(N / num_splits).
+ *
+ *   Pass 1 (gqa_decode_splitkv_kernel):  grid (Hq, num_splits, B)
+ *   Pass 2 (gqa_combine_kernel):         grid (Hq, B)
  */
 
 #include <torch/extension.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <float.h>
+#include <algorithm>
 
 #define HEAD_DIM      128
 #define TILE_SIZE     128
@@ -26,7 +38,7 @@
 #define FULL_MASK     0xffffffff
 #define NUM_WARPS     (BLOCK_THREADS / WARP_SIZE)   // 4
 
-// ─── warp reductions ─────────────────────────────────────────────────────────
+// ─── warp / block reductions ─────────────────────────────────────────────────
 __device__ __forceinline__ float warp_reduce_sum(float v) {
     #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1)
@@ -41,131 +53,107 @@ __device__ __forceinline__ float warp_reduce_max(float v) {
     return v;
 }
 
-// ─── block reductions ────────────────────────────────────────────────────────
-
 __device__ __forceinline__ float block_reduce_max(float val, float* smem_warp) {
     int warp_id = threadIdx.x / WARP_SIZE;
     int lane_id = threadIdx.x % WARP_SIZE;
-
-    // Step 1: reduce within each warp
     val = warp_reduce_max(val);
     if (lane_id == 0) smem_warp[warp_id] = val;
     __syncthreads();
-
-    // Step 2: warp 0 reduces across warp results
     val = (threadIdx.x < NUM_WARPS) ? smem_warp[threadIdx.x] : -FLT_MAX;
     if (warp_id == 0) val = warp_reduce_max(val);
-
-    // Step 3: write result to smem[0] so ALL warps can read it
     if (warp_id == 0 && lane_id == 0) smem_warp[0] = val;
     __syncthreads();
-
-    return smem_warp[0];   // every thread reads the same value
+    return smem_warp[0];
 }
 
 __device__ __forceinline__ float block_reduce_sum(float val, float* smem_warp) {
     int warp_id = threadIdx.x / WARP_SIZE;
     int lane_id = threadIdx.x % WARP_SIZE;
-
     val = warp_reduce_sum(val);
     if (lane_id == 0) smem_warp[warp_id] = val;
     __syncthreads();
-
     val = (threadIdx.x < NUM_WARPS) ? smem_warp[threadIdx.x] : 0.f;
     if (warp_id == 0) val = warp_reduce_sum(val);
-
     if (warp_id == 0 && lane_id == 0) smem_warp[0] = val;
     __syncthreads();
-
     return smem_warp[0];
 }
 
-// ─── main kernel ─────────────────────────────────────────────────────────────
-extern "C" __global__ void gqa_decode_kernel(
-    const __half* __restrict__ Q,    // [B, Hq, D]
-    const __half* __restrict__ K,    // [B, N, Hkv, D]
-    const __half* __restrict__ V,    // [B, N, Hkv, D]
-    __half*       __restrict__ Out,  // [B, Hq, D]
+// ─── Pass 1: per-split partial attention ─────────────────────────────────────
+// Each block handles one (q_head, split, b). Thread tid owns output channel tid
+// AND computes the score for token tid within each 128-token tile (TILE == D).
+__global__ void gqa_decode_splitkv_kernel(
+    const __half* __restrict__ Q,          // [B, Hq, D]
+    const __half* __restrict__ K,          // [B, N, Hkv, D]
+    const __half* __restrict__ V,          // [B, N, Hkv, D]
+    float*        __restrict__ O_partial,  // [B, Hq, S, D]  unnormalized
+    float*        __restrict__ m_partial,  // [B, Hq, S]     running max
+    float*        __restrict__ l_partial,  // [B, Hq, S]     running sum
     int B, int N, int Hq, int Hkv, int D,
-    float scale)
+    int num_splits, int split_len, float scale)
 {
-    int b      = blockIdx.y;
     int q_head = blockIdx.x;
-    int tid    = threadIdx.x;   // 0..127  (== channel index)
+    int split  = blockIdx.y;
+    int b      = blockIdx.z;
+    int tid    = threadIdx.x;   // 0..127 (channel index)
 
     int group_size = Hq / Hkv;
     int kv_head    = q_head / group_size;
 
-    // ── shared memory layout ──────────────────────────────────────────────────
-    // tile_Q  [HEAD_DIM]              — Q loaded once, reused every tile
-    // tile_K  [TILE_SIZE][HEAD_DIM]   — current KV tile
-    // tile_V  [HEAD_DIM][TILE_SIZE]   — TRANSPOSED vs original
-    //                                   FIX [P2-6]: row access in V accum
-    //                                   eliminates shared memory bank conflicts
-    // scores  [TILE_SIZE]             — exp(score - max) per token in tile
-    // warp_buf[NUM_WARPS]             — block reduction scratch
-    //
+    int split_start = split * split_len;
+    int split_end   = min(split_start + split_len, N);
+
+    int base_hs = (b * Hq + q_head) * num_splits + split;
+
+    // Empty split (can happen only if num_splits over-provisioned): neutral partial.
+    if (split_start >= split_end) {
+        O_partial[base_hs * D + tid] = 0.f;
+        if (tid == 0) { m_partial[base_hs] = -FLT_MAX; l_partial[base_hs] = 0.f; }
+        return;
+    }
 
     __shared__ __half tile_Q[HEAD_DIM];
     __shared__ float  scores[TILE_SIZE];
     __shared__ float  warp_buf[NUM_WARPS];
 
-    // ── 2. Large arrays become dynamic ────────────────────────────────────
-    extern __shared__ __half dynamic_smem[];
-    __half (*tile_K)[HEAD_DIM] = reinterpret_cast<__half(*)[HEAD_DIM]>(dynamic_smem);
-    __half (*tile_V)[TILE_SIZE] = reinterpret_cast<__half(*)[TILE_SIZE]>(dynamic_smem + TILE_SIZE * HEAD_DIM);
+    extern __shared__ __half smem[];
+    __half (*tile_K)[HEAD_DIM] = reinterpret_cast<__half(*)[HEAD_DIM]>(smem);
+    __half (*tile_V)[HEAD_DIM] = reinterpret_cast<__half(*)[HEAD_DIM]>(smem + TILE_SIZE * HEAD_DIM);
 
-    // ── FIX [P0-1]: load Q into shared memory ONCE ───────────────────────────
-    // Original loaded Q from global memory inside every tile iteration
-    // (HEAD_DIM reads × num_tiles × per thread = 128 × 500 = 64,000 at 64K).
-    // Loading once into shared memory costs HEAD_DIM reads total.
+    // Load Q once into shared memory.
     tile_Q[tid] = Q[b * Hq * D + q_head * D + tid];
     __syncthreads();
 
-    // ── online softmax accumulators ───────────────────────────────────────────
     float running_max = -FLT_MAX;
     float running_sum = 0.f;
-    float acc         = 0.f;   // output channel = tid, accumulated across tiles
+    float acc         = 0.f;   // unnormalized output for channel tid
 
-    int num_tiles = (N + TILE_SIZE - 1) / TILE_SIZE;
+    int num_tiles = (split_end - split_start + TILE_SIZE - 1) / TILE_SIZE;
 
-    for (int tile = 0; tile < num_tiles; tile++) {
-        int tile_start  = tile * TILE_SIZE;
-        int tile_tokens = min(TILE_SIZE, N - tile_start);
+    for (int t = 0; t < num_tiles; t++) {
+        int tile_start  = split_start + t * TILE_SIZE;
+        int tile_tokens = min(TILE_SIZE, split_end - tile_start);
 
-        // ── load KV tile cooperatively ────────────────────────────────────────
-        // BLOCK_THREADS=128 threads load TILE_SIZE*HEAD_DIM=16384 fp16 values
-        // Each thread loads 128 elements — coalesced global memory access
-        //
-        // tile_K stored as [tok][dim] — coalesced load, used for dot product
-        // tile_V stored as [dim][tok] — FIX [P2-6]: transposed so V accum
-        //   reads tile_V[tid][t] (row access) instead of tile_V[t][tid]
-        //   (column access) — eliminates shared memory bank conflicts
-        int total_elems = TILE_SIZE * HEAD_DIM;
-        for (int i = tid; i < total_elems; i += BLOCK_THREADS) {
-            int tok_local  = i / HEAD_DIM;
-            int dim        = i % HEAD_DIM;
-            int tok_global = tile_start + tok_local;
-
-            bool valid = (tok_global < N);
-            int kv_offset = b * N * Hkv * D
-                          + tok_global * Hkv * D
-                          + kv_head * D + dim;
-
-            __half kval = valid ? K[kv_offset] : __float2half(0.f);
-            __half vval = valid ? V[kv_offset] : __float2half(0.f);
-
-            tile_K[tok_local][dim] = kval;
-            tile_V[dim][tok_local] = vval;   // transposed store
+        // Cooperative coalesced load of this tile's K and V into shared memory.
+        // Natural [tok][dim] layout for both — V accum reads tile_V[t][tid]
+        // (one row per iter across threads) which is at most a 2-way bank
+        // conflict, versus the 32-way conflict of the old transposed layout.
+        for (int i = tid; i < TILE_SIZE * HEAD_DIM; i += BLOCK_THREADS) {
+            int tok_local = i / HEAD_DIM;
+            int dim       = i % HEAD_DIM;
+            int tok_glob  = tile_start + tok_local;
+            bool valid = (tok_local < tile_tokens);
+            int off = b * N * Hkv * D + tok_glob * Hkv * D + kv_head * D + dim;
+            tile_K[tok_local][dim] = valid ? K[off] : __float2half(0.f);
+            tile_V[tok_local][dim] = valid ? V[off] : __float2half(0.f);
         }
         __syncthreads();
 
-        // ── compute dot(Q, K[tid]) for token tid in this tile ─────────────────
-       
+        // Score for token tid (half2-vectorized dot product).
         float score = -FLT_MAX;
         if (tid < tile_tokens) {
             float dot = 0.f;
-            #pragma unroll 4
+            #pragma unroll
             for (int d = 0; d < HEAD_DIM; d += 2) {
                 half2 q2 = *reinterpret_cast<const half2*>(&tile_Q[d]);
                 half2 k2 = *reinterpret_cast<const half2*>(&tile_K[tid][d]);
@@ -178,19 +166,15 @@ extern "C" __global__ void gqa_decode_kernel(
         scores[tid] = score;
         __syncthreads();
 
-        // ── online softmax update ─────────────────────────────────────────────
-        // block_reduce_max now correct for all warps —
-        // warps 1-3 previously received -FLT_MAX, causing them to never
-        // update running_max and accumulate V with wrong weights.
         float tile_max = block_reduce_max(scores[tid], warp_buf);
         __syncthreads();
 
         float new_max = fmaxf(running_max, tile_max);
-        float rescale = expf(running_max - new_max);   // 1.0 if max unchanged
+        float rescale = expf(running_max - new_max);
         running_max   = new_max;
 
-        float exp_s    = (tid < tile_tokens) ? expf(score - running_max) : 0.f;
-        scores[tid]    = exp_s;
+        float exp_s = (tid < tile_tokens) ? expf(score - running_max) : 0.f;
+        scores[tid] = exp_s;
         __syncthreads();
 
         float tile_sum = block_reduce_sum(exp_s, warp_buf);
@@ -198,20 +182,54 @@ extern "C" __global__ void gqa_decode_kernel(
 
         running_sum = running_sum * rescale + tile_sum;
 
-        // ── accumulate weighted V for channel tid ─────────────────────────────
-        // tile_V[tid][t] is row access — no bank conflict
-        // Original tile_V[t][tid] was column access — bank conflict every iter
         acc *= rescale;
         #pragma unroll 8
-        for (int t = 0; t < tile_tokens; t++)
-            acc += scores[t] * __half2float(tile_V[tid][t]);
-
+        for (int tt = 0; tt < tile_tokens; tt++)
+            acc += scores[tt] * __half2float(tile_V[tt][tid]);
         __syncthreads();
     }
 
-    // ── normalize and write output ────────────────────────────────────────────
-    float inv = (running_sum > 1e-9f) ? (1.f / running_sum) : 0.f;
-    Out[b * Hq * D + q_head * D + tid] = __float2half_rn(acc * inv);
+    // Emit UNNORMALIZED partials — the combine kernel does the final divide.
+    O_partial[base_hs * D + tid] = acc;
+    if (tid == 0) {
+        m_partial[base_hs] = running_max;
+        l_partial[base_hs] = running_sum;
+    }
+}
+
+// ─── Pass 2: combine partials across splits ──────────────────────────────────
+// grid (Hq, B), block D. Merges num_splits partials per head with the exact
+// log-sum-exp rescale:  O = sum_s e^{m_s - M} O_s  /  sum_s e^{m_s - M} l_s.
+__global__ void gqa_combine_kernel(
+    const float*  __restrict__ O_partial,  // [B, Hq, S, D]
+    const float*  __restrict__ m_partial,  // [B, Hq, S]
+    const float*  __restrict__ l_partial,  // [B, Hq, S]
+    __half*       __restrict__ Out,        // [B, Hq, D]
+    int B, int Hq, int D, int num_splits)
+{
+    int q_head = blockIdx.x;
+    int b      = blockIdx.y;
+    int tid    = threadIdx.x;   // channel
+
+    int hb = b * Hq + q_head;
+    const float* mp = m_partial + hb * num_splits;
+    const float* lp = l_partial + hb * num_splits;
+    const float* Op = O_partial + hb * num_splits * D;
+
+    float gmax = -FLT_MAX;
+    for (int s = 0; s < num_splits; s++) gmax = fmaxf(gmax, mp[s]);
+
+    float acc = 0.f, denom = 0.f;
+    for (int s = 0; s < num_splits; s++) {
+        float m = mp[s];
+        if (m == -FLT_MAX) continue;          // skip empty split
+        float w = __expf(m - gmax);
+        acc   += w * Op[s * D + tid];
+        denom += w * lp[s];
+    }
+
+    float inv = (denom > 1e-9f) ? (1.f / denom) : 0.f;
+    Out[hb * D + tid] = __float2half_rn(acc * inv);
 }
 
 // ─── host launcher ───────────────────────────────────────────────────────────
@@ -221,7 +239,6 @@ torch::Tensor launch_fused_gqa(
     torch::Tensor V,    // [B, N, Hkv, D]  fp16
     double scale)
 {
-    // full input validation
     TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(),
                 "Q/K/V must be CUDA tensors");
     TORCH_CHECK(Q.dtype() == torch::kFloat16 &&
@@ -239,53 +256,67 @@ torch::Tensor launch_fused_gqa(
 
     TORCH_CHECK(Q.size(0) == K.size(0) && Q.size(0) == V.size(0),
                 "batch size mismatch across Q/K/V");
-    TORCH_CHECK(D == HEAD_DIM,
-                "D=", D, " — HEAD_DIM must be 128");
+    TORCH_CHECK(D == HEAD_DIM, "D=", D, " — HEAD_DIM must be 128");
     TORCH_CHECK(K.size(3) == D && V.size(3) == D,
                 "K/V head_dim must match Q head_dim=", D);
     TORCH_CHECK(V.size(1) == N && V.size(2) == Hkv,
                 "V shape must be [B, N, Hkv, D] matching K");
-    TORCH_CHECK(Hq % Hkv == 0,
-                "Hq=", Hq, " must be divisible by Hkv=", Hkv);
-    TORCH_CHECK(D % 2 == 0,
-                "D must be even for half2 vectorization");
+    TORCH_CHECK(Hq % Hkv == 0, "Hq=", Hq, " must be divisible by Hkv=", Hkv);
+    TORCH_CHECK(D % 2 == 0, "D must be even for half2 vectorization");
 
-    auto Out = torch::zeros({B, Hq, D}, Q.options());
+    // ── choose num_splits: enough to fill the GPU AND keep each split small ──
+    int sm_count = 0;
+    cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount,
+                           Q.device().index());
+    if (sm_count <= 0) sm_count = 108;
 
-    dim3 grid(Hq, B);
+    const int SPLIT_TOKENS = 512;   // target tokens per split
+    const int MAX_SPLITS   = 256;   // caps partial-buffer size and combine cost
+
+    int splits_by_tokens = (N + SPLIT_TOKENS - 1) / SPLIT_TOKENS;
+    int splits_by_occ    = (2 * sm_count + Hq * B - 1) / (Hq * B);  // ~2x SMs
+    int num_splits = std::max(splits_by_tokens, splits_by_occ);
+    num_splits = std::max(1, std::min(num_splits, MAX_SPLITS));
+
+    int split_len = (N + num_splits - 1) / num_splits;   // tokens per split (ceil)
+    num_splits    = (N + split_len - 1) / split_len;     // trim to what N needs
+
+    auto f32 = torch::TensorOptions().dtype(torch::kFloat32).device(Q.device());
+    auto O_partial = torch::empty({B, Hq, num_splits, D}, f32);
+    auto m_partial = torch::empty({B, Hq, num_splits},    f32);
+    auto l_partial = torch::empty({B, Hq, num_splits},    f32);
+    auto Out       = torch::empty({B, Hq, D}, Q.options());
+
     dim3 block(BLOCK_THREADS);
+    int  smem = 2 * TILE_SIZE * HEAD_DIM * sizeof(__half);   // 64 KB
+    cudaFuncSetAttribute(gqa_decode_splitkv_kernel,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
 
-    // Shared memory: tile_Q + tile_K + tile_V + scores + warp_buf
-    // = HEAD_DIM*2 + TILE_SIZE*HEAD_DIM*2 + HEAD_DIM*TILE_SIZE*2
-    //   + TILE_SIZE*4 + NUM_WARPS*4
-    // = 256 + 32768 + 32768 + 512 + 16 = 66,320 bytes (~65 KB)
-    // A100 supports 164KB shared memory per SM with opt-in —
-    // default limit is 48KB. For large HEAD_DIM*TILE_SIZE tiles,
-    // request extended shared memory:
-    int dynamic_smem_bytes = 2 * TILE_SIZE * HEAD_DIM * sizeof(__half);
-
-    // 2. Request permission from CUDA to exceed the standard 48KB limit
-    cudaFuncSetAttribute(
-        gqa_decode_kernel,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        dynamic_smem_bytes);
-
-    // 3. Launch the kernel, passing the dynamic bytes as the 3rd argument
-    gqa_decode_kernel<<<grid, block, dynamic_smem_bytes>>>(
+    dim3 gridA(Hq, num_splits, B);
+    gqa_decode_splitkv_kernel<<<gridA, block, smem>>>(
         reinterpret_cast<const __half*>(Q.data_ptr<at::Half>()),
         reinterpret_cast<const __half*>(K.data_ptr<at::Half>()),
         reinterpret_cast<const __half*>(V.data_ptr<at::Half>()),
-        reinterpret_cast<__half*>(Out.data_ptr<at::Half>()),
-        B, N, Hq, Hkv, D,
+        O_partial.data_ptr<float>(),
+        m_partial.data_ptr<float>(),
+        l_partial.data_ptr<float>(),
+        B, N, Hq, Hkv, D, num_splits, split_len,
         static_cast<float>(scale));
+
+    dim3 gridB(Hq, B);
+    gqa_combine_kernel<<<gridB, block>>>(
+        O_partial.data_ptr<float>(),
+        m_partial.data_ptr<float>(),
+        l_partial.data_ptr<float>(),
+        reinterpret_cast<__half*>(Out.data_ptr<at::Half>()),
+        B, Hq, D, num_splits);
 
 #ifdef DEBUG_KERNELS
     cudaDeviceSynchronize();
 #endif
     cudaError_t err = cudaGetLastError();
     TORCH_CHECK(err == cudaSuccess,
-                "gqa_decode_kernel launch failed: ",
+                "gqa_decode split-KV launch failed: ",
                 cudaGetErrorString(err));
     return Out;
 }
-

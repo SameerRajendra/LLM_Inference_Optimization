@@ -71,12 +71,20 @@ def clone_cache(past_kv) -> DynamicCache:
 
 
 def prefill(model, input_ids: torch.Tensor) -> DynamicCache:
-    """Run dense prefill, return a frozen DynamicCache regardless of transformers version."""
+    """Run dense prefill, return a frozen DynamicCache regardless of transformers version.
+
+    Calls model.model (the base LlamaModel) instead of model (LlamaForCausalLM):
+    prefill only needs the KV cache, so running the LM head is pure waste. The head
+    materialises logits of shape [1, ctx_len, vocab] and then logits.float() doubles
+    it — a ~30 GB spike at 64K context that OOMs an 80 GB GPU. The base model returns
+    hidden states + past_key_values with no logits at all.
+    """
     restore_attention(model)
+    base = getattr(model, "model", model)   # LlamaModel — no lm_head, no logits
     with torch.no_grad():
         try:
             # Modern path: pass empty DynamicCache → output is DynamicCache
-            out = model(
+            out = base(
                 input_ids,
                 past_key_values=DynamicCache(),
                 use_cache=True,
@@ -84,7 +92,7 @@ def prefill(model, input_ids: torch.Tensor) -> DynamicCache:
         except Exception:
             # Legacy path: pass None → output is tuple-of-tuples
             # clone_cache() handles the conversion transparently
-            out = model(
+            out = base(
                 input_ids,
                 past_key_values=None,
                 use_cache=True,
@@ -850,9 +858,12 @@ def save_results(records, top_k, out_dir, model_id=MODEL_ID):
 
     csv_path = f"{out_dir}/results.csv"
     fields   = ["ctx_len", "mode", "tokens_attended", "latency_ms",
-                "speedup", "mean_abs_logit_diff", "max_abs_logit_diff", "argmax_match"]
+                "speedup", "mean_abs_logit_diff", "max_abs_logit_diff", "argmax_match",
+                "raw_kernel_ms", "latency_basis"]
     with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
+        # extrasaction="ignore" so an unexpected record key can never crash a
+        # finished run at the very end (rows missing a field get restval="").
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
 
