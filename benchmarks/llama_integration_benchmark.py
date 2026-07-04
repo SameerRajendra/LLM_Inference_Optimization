@@ -172,14 +172,24 @@ def patch_attention(
                 cache_kwargs["cache_position"] = cache_position
             K, V = past_key_value.update(K, V, self.layer_idx, cache_kwargs)
 
-        K = repeat_kv(K, H // Hkv)   # [B, H, ctx_len, D]
-        V = repeat_kv(V, H // Hkv)
+        K_kv, V_kv = K, V                    # [B, Hkv, ctx, D] — un-repeated, for v3 fused_gqa
+        K = repeat_kv(K_kv, H // Hkv)        # [B, H, ctx_len, D]
+        V = repeat_kv(V_kv, H // Hkv)
 
         kv_len = K.shape[2]
 
         if S == 1:
-            # ── decode step: use sparse kernel ────────────────────────────
-            if mode == "token-sparse" and kv_len >= top_k:
+            # ── decode step: use custom kernel ────────────────────────────
+            if mode == "v3-dense":
+                # fused_gqa performs GQA head-grouping internally → pass
+                # un-repeated KV as [B, N, Hkv, D] and Q as [B, Hq, D].
+                Qv = Q.squeeze(2).contiguous().to(torch.float16)          # [B, H, D]
+                Kv = K_kv.transpose(1, 2).contiguous().to(torch.float16)  # [B, N, Hkv, D]
+                Vv = V_kv.transpose(1, 2).contiguous().to(torch.float16)  # [B, N, Hkv, D]
+                gqa_scale = 1.0 / (D ** 0.5)
+                attn_out = fused_gqa(Qv, Kv, Vv, gqa_scale).unsqueeze(2).to(Q.dtype)
+
+            elif mode == "token-sparse" and kv_len >= top_k:
                 attn_out = kv_evict_quant_forward(
                     Q.contiguous().to(torch.float16),
                     K.contiguous().to(torch.float16),
@@ -693,6 +703,19 @@ def run():
         # since all have identical shape at decode step.
         v3_lat = benchmark_v3_latency(model, new_token, past_kv_dense)
 
+        # ── v3 FULL-MODEL decode latency (apples-to-apples) ──────────────
+        # Patch the fused GQA kernel into ALL attention layers and time a
+        # full model() decode step — the SAME measurement basis as the
+        # dense, token-sparse, block-sparse and hybrid rows below.
+        # This is the honest v3 decode speedup. v3_lat above is a single
+        # isolated kernel launch and must NOT be divided into full-model
+        # dense latency (that mismatch is what produced the bogus 16.38x).
+        past_kv_v3_lat = prefill(model, input_ids)
+        patch_attention(model, mode="v3-dense")
+        v3_model_lat = benchmark_latency_no_clone(model, new_token, past_kv_v3_lat)
+        restore_attention(model)
+        del past_kv_v3_lat
+
         # ── token-sparse ──────────────────────────────────────────────────
         token_metrics = compare_logits(
             model, new_token, past_kv_dense, past_kv_sparse,
@@ -734,9 +757,9 @@ def run():
             ("dense",
              dense_lat,  1.0,
              0.0,                                    1.0),
-            # v3 row — mean_diff = max_abs_error vs SDPA
+            # v3 row — full-model decode latency (v3 patched into all layers)
             ("v3-gqa-dense",
-             v3_lat,     dense_lat / v3_lat,
+             v3_model_lat, dense_lat / v3_model_lat,
              v3_validation["max_abs_error"],         1.0),
             ("token-sparse",
              token_lat,  dense_lat / token_lat,
@@ -755,16 +778,16 @@ def run():
         # ── records ───────────────────────────────────────────────────────
         mode_metrics = {
             "dense":        ({},             dense_lat),
-            # v3 row — mean_diff = max_abs_error vs SDPA
+            # v3 row — full-model decode latency (apples-to-apples)
             "v3-gqa-dense": ({"mean_abs_logit_diff": v3_validation["max_abs_error"],
                                "max_abs_logit_diff":  v3_validation["max_abs_error"],
-                               "argmax_match":        1.0},   v3_lat),
+                               "argmax_match":        1.0},   v3_model_lat),
             "token-sparse": (token_metrics,  token_lat),
             "block-sparse": (block_metrics,  block_lat),
             "hybrid-16":    (hybrid_metrics, hybrid_lat),
         }
         for mode_name, (metrics, lat) in mode_metrics.items():
-            records.append({
+            rec = {
                 "ctx_len":             ctx_len,
                 "mode":                mode_name,
                 "tokens_attended":     eff_token_budget.get(mode_name, TOP_K),
@@ -773,7 +796,14 @@ def run():
                 "mean_abs_logit_diff": round(metrics.get("mean_abs_logit_diff", 0.0), 6),
                 "max_abs_logit_diff":  round(metrics.get("max_abs_logit_diff",  0.0), 6),
                 "argmax_match":        round(metrics.get("argmax_match",         1.0), 6),
-            })
+            }
+            if mode_name == "v3-gqa-dense":
+                # latency_ms above is the full-model decode with v3 patched
+                # into every layer. Keep the isolated single-kernel latency
+                # separately so the two bases are never conflated again.
+                rec["raw_kernel_ms"]  = round(v3_lat, 4)
+                rec["latency_basis"]  = "full_model_decode_v3_patched"
+            records.append(rec)
 
         del past_kv_dense, past_kv_sparse
         torch.cuda.empty_cache()
