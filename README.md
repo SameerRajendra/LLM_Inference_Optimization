@@ -100,6 +100,8 @@ LLM_Inference_Optimization/
 │   ├── profile_kernel_vs_sdpa.py       # isolated kernel vs FlashAttention (bandwidth)
 │   └── validate_int8_kv.py             # INT8 KV-cache accuracy gate
 ├── tests/                         # kernel correctness vs PyTorch reference
+├── train/
+│   └── train_fsdp_lora.py             # FSDP + custom LoRA fine-tuning harness
 └── results/                       # committed benchmark output (CSV + JSON)
 ```
 
