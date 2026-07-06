@@ -63,14 +63,10 @@ weight-pruning setting) and motivates a **per-layer dense/sparse routing policy*
 
 ---
 
-## What works / what's in progress
+## Future works
 
 | Component | Status |
 |---|---|
-| Split-KV GQA decode kernel (dense, exact) | ✅ complete, validated (32/32 layers) |
-| Isolated + end-to-end benchmarks vs FlashAttention | ✅ |
-| JAX/Pallas reference kernel (numerical cross-check) | ✅ |
-| Top-k / block-sparse kernels | ⚠️ **ablation only** — currently slower than dense (they scan all K); Quest-style page-sparse redesign in progress |
 | INT8/FP8 KV-cache quantization | 🚧 accuracy validated in PyTorch; CUDA kernel pending |
 | Adaptive per-layer router + autotuner | 🚧 planned |
 | Tensor-parallel (TP=2) decode | 🚧 planned |
