@@ -1,6 +1,6 @@
 # LLM_Inference_Optimization
 
-**A split-KV (FlashDecoding-style) fused GQA decode kernel for Llama-3.1-8B on NVIDIA Hopper — benchmarked honestly against FlashAttention, and the foundation for an adaptive KV-cache decode engine.**
+**A split-KV (FlashDecoding-style) fused GQA decode kernel for Llama-3.1-8B on NVIDIA Hopper — benchmarked   against FlashAttention, and the foundation for an adaptive KV-cache decode engine.**
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python)
 ![CUDA](https://img.shields.io/badge/CUDA-12.4-green?logo=nvidia)
@@ -63,17 +63,6 @@ weight-pruning setting) and motivates a **per-layer dense/sparse routing policy*
 
 ---
 
-## What works / what's in progress
-
-| Component | Status |
-|---|---|
-| Split-KV GQA decode kernel (dense, exact) | ✅ complete, validated (32/32 layers) |
-| Isolated + end-to-end benchmarks vs FlashAttention | ✅ |
-| JAX/Pallas reference kernel (numerical cross-check) | ✅ |
-| Top-k / block-sparse kernels | ⚠️ **ablation only** — currently slower than dense (they scan all K); Quest-style page-sparse redesign in progress |
-| INT8/FP8 KV-cache quantization | 🚧 accuracy validated in PyTorch; CUDA kernel pending |
-| Adaptive per-layer router + autotuner | 🚧 planned |
-| Tensor-parallel (TP=2) decode | 🚧 planned |
 
 The sparse kernels are reported honestly as **ablations**: because they compute scores over the
 full KV before selecting top-k, they do not yet reduce bandwidth and are slower than dense. The
