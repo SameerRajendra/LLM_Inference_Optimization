@@ -33,7 +33,7 @@ most of the GPU idle.
 - **Numerically exact** vs PyTorch SDPA across **all 32 layers**: max abs error ≤ **1e-3** up to 64K context.
 - **18× faster than a naïve single-block decode kernel** (isolated kernel latency at 64K: 25.4 ms → **1.37 ms**).
 
-### Honest comparison vs FlashAttention (isolated kernel, per decode step)
+### Comparison vs FlashAttention (isolated kernel, per decode step)
 
 | Context | split-KV kernel (ms) | PyTorch SDPA / FlashAttention (ms) | our HBM bandwidth |
 |:---:|:---:|:---:|:---:|
