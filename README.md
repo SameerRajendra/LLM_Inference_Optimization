@@ -10,8 +10,7 @@
 Long-context LLM decoding is bottlenecked by KV-cache memory bandwidth: at 64K tokens the
 decode step is memory-bound, not compute-bound. This repo builds and **rigorously benchmarks**
 custom CUDA decode kernels for Llama-3.1-8B (32 query / 8 KV heads, `head_dim=128`, Hopper
-`sm_90a`), with an emphasis on honest measurement against a state-of-the-art baseline
-(PyTorch SDPA / FlashAttention).
+`sm_90a`), measured against a state-of-the-art baseline (PyTorch SDPA / FlashAttention).
 
 > **Status.** The dense **split-KV GQA decode kernel is complete and validated.** The sparse
 > and quantized KV kernels and the adaptive per-layer router are **in progress** — see
@@ -64,7 +63,7 @@ weight-pruning setting) and motivates a **per-layer dense/sparse routing policy*
 ---
 
 
-The sparse kernels are reported honestly as **ablations**: because they compute scores over the
+The sparse kernels are included as **ablations**: because they compute scores over the
 full KV before selecting top-k, they do not yet reduce bandwidth and are slower than dense. The
 Quest-style redesign (page-level criticality estimation → load only top-k pages) is what turns
 sparsity into a real speedup.
