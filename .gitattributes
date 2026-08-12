@@ -1,0 +1,11 @@
+# Authored on Windows, executed on a Linux cluster — force LF on anything
+# that a shell, Slurm, or the CUDA toolchain will ever read.
+* text=auto
+*.sh text eol=lf
+*.sbatch text eol=lf
+*.py text eol=lf
+*.cu text eol=lf
+*.cuh text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+Makefile text eol=lf
