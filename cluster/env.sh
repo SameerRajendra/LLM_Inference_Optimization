@@ -1,5 +1,5 @@
 # Sourced by every Slurm job script — one place to fix cluster specifics.
-CUDA_MODULE="${CUDA_MODULE:-cuda/12.4}"
+CUDA_MODULE="${CUDA_MODULE:-cuda12.4}"
 VENV_DIR="${VENV_DIR:-$HOME/venvs/llmopt}"
 export HF_HOME="${HF_HOME:-${SCRATCH:-$HOME}/hf_cache}"
 

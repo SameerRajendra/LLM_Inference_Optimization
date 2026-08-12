@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # ----------------------------- knobs -----------------------------------------
-CUDA_MODULE="${CUDA_MODULE:-cuda/12.4}"        # `module avail cuda` to list
+CUDA_MODULE="${CUDA_MODULE:-cuda12.4}"        # `module avail cuda` to list
 PYTHON_MODULE="${PYTHON_MODULE:-}"             # e.g. python/3.11 (empty = system python3)
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR="${VENV_DIR:-$HOME/venvs/llmopt}"
@@ -44,7 +44,7 @@ python -V
 pip install --upgrade pip setuptools wheel ninja pybind11
 
 echo "== [3/6] PyTorch ($TORCH_SPEC, $TORCH_INDEX) =="
-pip install "$TORCH_SPEC" --index-url "$TORCH_INDEX"
+pip install "$TORCH_SPEC" --extra-index-url "$TORCH_INDEX"
 # Triton ships inside the Linux torch wheel (pytorch-triton) — no extra install.
 python -c "import triton; print('triton', triton.__version__)"
 
