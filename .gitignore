@@ -1,0 +1,41 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# --- Node tooling (doc generation; never ship) ---
+node_modules/
+package.json
+package-lock.json
+
+# --- Third-party sources (cloned by cluster/setup_env.sh, not vendored) ---
+third_party/
+
+# --- Cluster / Slurm artifacts ---
+cluster/logs/
+slurm-*.out
+*.out
+
+# --- Profiler binaries (too large for git; commit CSV/JSON summaries instead) ---
+*.nsys-rep
+*.ncu-rep
+*.sqlite
+
+# --- Personal files: never publish (resume, interview prep, office docs) ---
+*[Rr]esume*
+*[Ii]nterview*
+*Recruiter*
+*CheatSheet*
+*.docx
+*.local.pdf
+.~lock.*
+*.tmp
+
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db

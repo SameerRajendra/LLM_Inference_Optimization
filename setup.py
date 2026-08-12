@@ -20,6 +20,16 @@ if os.environ.get("SKIP_CUDA_BUILD") != "1":
 
         CXX_FLAGS = ["-O3", "-std=c++17"]
 
+        include_dirs = ["csrc/kernels", "csrc/pybind"]
+        # Header-only CUTLASS/CuTe, cloned by cluster/setup_env.sh (git-ignored).
+        cutlass_inc = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "third_party", "cutlass", "include",
+        )
+        if os.path.isdir(cutlass_inc):
+            include_dirs.append(cutlass_inc)
+            NVCC_FLAGS.append("-DHAS_CUTLASS=1")
+
         ext_modules = [
             CUDAExtension(
                 name="sparse_kv._C",
@@ -27,9 +37,9 @@ if os.environ.get("SKIP_CUDA_BUILD") != "1":
                     "csrc/pybind/bindings.cpp",
                     "csrc/kernels/kv_evict_quant.cu",
                     "csrc/kernels/sparse_attention.cu",
-                    "csrc/kernels/gqa_decode.cu",       # ← add this
+                    "csrc/kernels/gqa_decode.cu",
                 ],
-                include_dirs=["csrc/kernels", "csrc/pybind"],
+                include_dirs=include_dirs,
                 extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
                 extra_link_args=["-lcuda"],
             )
