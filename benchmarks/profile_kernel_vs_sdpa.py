@@ -12,10 +12,27 @@ Why this exists:
 
 Run (no model download, no HF login, tiny GPU footprint):
   python benchmarks/profile_kernel_vs_sdpa.py
+  python benchmarks/profile_kernel_vs_sdpa.py --label stage1-bank-conflict
+
+Every run is saved to results/kernel_vs_sdpa/ pinned to the git SHA, so the
+optimisation stages form an auditable progression rather than a claim.
 """
+import argparse
+import os
+import sys
+
 import torch
 import torch.nn.functional as F
-from sparse_kv._C import fused_gqa
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from sparse_kv._C import fused_gqa            # noqa: E402
+from bench_common import save_result          # noqa: E402
+
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--label", default="",
+                 help="names this run in results/ (e.g. stage1-bank-conflict)")
+_args = _ap.parse_args()
 
 torch.manual_seed(0)
 dev = "cuda"
@@ -46,6 +63,7 @@ print(f"{'ctx':>8} {'v3(ms)':>10} {'SDPA(ms)':>10} {'v3/SDPA':>9} "
       f"{'v3 GB/s':>9} {'%HBM':>7} {'max_err':>9}")
 print("-" * 72)
 
+rows = []
 for N in CTX:
     # custom-kernel layout: Q [B,Hq,D], K/V [B,N,Hkv,D]  (kernel does GQA internally)
     Q  = torch.randn(B, Hq, D,      device=dev, dtype=torch.float16)
@@ -86,6 +104,16 @@ for N in CTX:
     print(f"{N:>8} {v3_ms:>10.4f} {sdpa_ms:>10.4f} {v3_ms/sdpa_ms:>8.2f}x "
           f"{gbps:>9.0f} {pct:>6.1f}% {max_err:>9.5f}")
 
+    rows.append({"ctx": N, "batch": B,
+                 "ours_ms": v3_ms, "sdpa_ms": sdpa_ms,
+                 "ratio": v3_ms / sdpa_ms,
+                 "kv_gb": kv_bytes / 1e9,
+                 "ours_gbps": gbps, "ours_pct_hbm": pct,
+                 "max_err": max_err})
+
 print("-" * 72)
 print("v3/SDPA < 1.0 = our kernel is faster;  %HBM = fraction of peak bandwidth used")
 print("(single decode step, batch=1, isolated — no model, no eager overhead)")
+
+save_result("kernel_vs_sdpa", rows, label=_args.label,
+            extra={"hq": Hq, "hkv": Hkv, "d": D, "hbm_tbs": HBM_TBs})
