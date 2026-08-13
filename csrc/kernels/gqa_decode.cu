@@ -34,6 +34,18 @@
 #define HEAD_DIM      128
 #define TILE_SIZE     128
 #define BLOCK_THREADS 128
+// Shared-memory row stride for the K/V tiles.
+//
+// With stride == HEAD_DIM (128 halfs = 256 B) the QK dot product below reads
+// tile_K[tid][d]: byte offset tid*256 + 2d, so bank = (tid*64 + d/2) % 32.
+// tid*64 % 32 == 0 for EVERY tid, i.e. all 32 lanes of a warp land on the same
+// bank and each load serialises into 32 transactions — on all 64 iterations of
+// the dot product.
+//
+// Padding by 2 halfs (stride 130 -> 260 B) makes bank = (tid + d/2) % 32, which
+// is one distinct bank per lane: conflict-free. 260 B stays 4-byte aligned, so
+// the half2 loads remain legal.
+#define SMEM_STRIDE   (HEAD_DIM + 2)
 #define WARP_SIZE     32
 #define FULL_MASK     0xffffffff
 #define NUM_WARPS     (BLOCK_THREADS / WARP_SIZE)   // 4
@@ -117,8 +129,8 @@ __global__ void gqa_decode_splitkv_kernel(
     __shared__ float  warp_buf[NUM_WARPS];
 
     extern __shared__ __half smem[];
-    __half (*tile_K)[HEAD_DIM] = reinterpret_cast<__half(*)[HEAD_DIM]>(smem);
-    __half (*tile_V)[HEAD_DIM] = reinterpret_cast<__half(*)[HEAD_DIM]>(smem + TILE_SIZE * HEAD_DIM);
+    __half (*tile_K)[SMEM_STRIDE] = reinterpret_cast<__half(*)[SMEM_STRIDE]>(smem);
+    __half (*tile_V)[SMEM_STRIDE] = reinterpret_cast<__half(*)[SMEM_STRIDE]>(smem + TILE_SIZE * SMEM_STRIDE);
 
     // Load Q once into shared memory.
     tile_Q[tid] = Q[b * Hq * D + q_head * D + tid];
@@ -163,10 +175,9 @@ __global__ void gqa_decode_splitkv_kernel(
             }
             score = dot * scale;
         }
-        scores[tid] = score;
-        __syncthreads();
-
-        float tile_max = block_reduce_max(scores[tid], warp_buf);
+        // Reduce straight from the register — the old code round-tripped this
+        // through shared memory and cost an extra barrier for no reason.
+        float tile_max = block_reduce_max(score, warp_buf);
         __syncthreads();
 
         float new_max = fmaxf(running_max, tile_max);
@@ -288,7 +299,9 @@ torch::Tensor launch_fused_gqa(
     auto Out       = torch::empty({B, Hq, D}, Q.options());
 
     dim3 block(BLOCK_THREADS);
-    int  smem = 2 * TILE_SIZE * HEAD_DIM * sizeof(__half);   // 64 KB
+    // Padded stride (see SMEM_STRIDE): 2 * 128 * 130 * 2 B = 65 KB, still one
+    // opt-in >48 KB allocation and unchanged blocks-per-SM vs the 64 KB version.
+    int  smem = 2 * TILE_SIZE * SMEM_STRIDE * sizeof(__half);
     cudaFuncSetAttribute(gqa_decode_splitkv_kernel,
                          cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
 
