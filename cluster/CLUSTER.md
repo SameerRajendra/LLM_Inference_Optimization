@@ -5,21 +5,27 @@ cluster → build/test/benchmark via Slurm.** Nothing is ever executed locally.
 
 ## One-time setup (login node)
 
+This cluster's `python3` is a shared, non-writeable install (`Defaulting to
+user installation because normal site-packages is not writeable`) that already
+carries torch 2.8.0+cu128, Triton 3.4.0, and transformers — so there's no venv.
+Everything installs to `~/.local` and the CUDA extension builds **in place**
+(`setup.py build_ext --inplace`), not via `pip install -e .` — pip 21.2.3 here
+recurses `setuptools develop` through itself and fails; `build_ext --inplace`
+sidesteps that entirely and is the verified-working path (2026-08-12).
+
 ```bash
 git clone https://github.com/SameerRajendra/LLM_Inference_Optimization.git
 cd LLM_Inference_Optimization
 git checkout decode-engine
 
-bash cluster/setup_env.sh          # modules + venv + torch cu124 + CUTLASS + build
+bash cluster/setup_env.sh          # build deps + CUTLASS clone + build_ext --inplace
 hf auth login                      # only for gated meta-llama weights
 python cluster/check_env.py        # login-node sanity (GPU checks skipped)
 ```
 
-If a module name differs on your cluster, override the knobs:
-
-```bash
-CUDA_MODULE=cuda/12.4 PYTHON_MODULE=python/3.11 bash cluster/setup_env.sh
-```
+`nvcc` (CUDA 12.4, at `/cm/shared/apps/cuda12.4/...`) is already on `PATH` by
+default on this cluster — no `module load` needed. If a fresh clone ever can't
+find it, set `CUDA_MODULE=<name>` (`module avail cuda` to find the name).
 
 All cluster-specific settings live in two places only: the knobs at the top of
 `cluster/setup_env.sh` (one-time) and `cluster/env.sh` (sourced by every job).
@@ -30,7 +36,7 @@ match `sinfo` output.
 
 ```bash
 git pull                                   # get the code I authored
-sbatch cluster/slurm/build.sbatch          # rebuild extension (or login-node pip install -e .)
+sbatch cluster/slurm/build.sbatch          # rebuild extension (or login-node: python setup.py build_ext --inplace)
 sbatch cluster/slurm/test.sbatch           # correctness gate: check_env + pytest on H100
 sbatch cluster/slurm/bench.sbatch          # isolated-kernel bandwidth benchmark
 RUN_E2E=1 sbatch --export=ALL cluster/slurm/bench.sbatch   # + end-to-end model decode
@@ -47,6 +53,14 @@ srun --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=32G --time=01:00:00 --
 source cluster/env.sh
 python cluster/check_env.py --require-gpu
 ```
+
+## Troubleshooting: build
+
+| Symptom | Fix |
+|---|---|
+| `error: invalid command 'bdist_wheel'` | `wheel` missing from user site: `pip install --user --upgrade setuptools wheel ninja pybind11` |
+| `pip install -e .` recurses into a nested `pip install -e . --use-pep517 ...` subprocess and fails | Known pip 21.2.3 + modern setuptools `develop` interaction. Use `python setup.py build_ext --inplace -v` instead — it builds `sparse_kv/_C*.so` directly with no install step, no pip involved. |
+| Need the real compiler error, not a wrapped subprocess trace | `python setup.py build_ext --inplace -v 2>&1 \| tee build.log` then `grep -i error build.log \| tail -40` |
 
 ## Profiling without sudo
 
