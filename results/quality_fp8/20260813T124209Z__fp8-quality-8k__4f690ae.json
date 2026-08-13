@@ -1,0 +1,44 @@
+{
+  "benchmark": "quality_fp8",
+  "label": "fp8-quality-8k",
+  "provenance": {
+    "utc": "2026-08-13T12:42:09Z",
+    "git_sha": "4f690ae",
+    "git_branch": "decode-engine",
+    "git_subject": "",
+    "git_dirty": null,
+    "git_available": false,
+    "host": "g012",
+    "python": "3.9.18",
+    "torch": "2.8.0+cu128",
+    "cuda": "12.8",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "sm": "sm_90",
+    "hbm_gb": 85.0
+  },
+  "rows": [
+    {
+      "model": "Qwen/Qwen3-8B",
+      "prefill": 8192,
+      "steps": 512,
+      "argmax_parity": 0.978515625,
+      "top5_hit": 1.0,
+      "kl_ref_fp8": 0.0021781965624541044,
+      "ppl_ref": 2.3853536481931394,
+      "ppl_fp8": 2.3837595109059917,
+      "ppl_delta_pct": -0.06683022822864335,
+      "ref_top1_confidence": 0.8223226070404053,
+      "parity_confident_steps": 0.9999999403953552,
+      "n_disagreements": 11,
+      "disagreement_ref_confidence": 0.2545137405395508,
+      "disagreement_top1_top2_gap": 0.026189684867858887,
+      "intercepted": 18432,
+      "passed_through": 36,
+      "verdict": "PASS"
+    }
+  ],
+  "extra": {
+    "protocol": "teacher-forced replay of the fp16 greedy continuation; prefill shared and exact"
+  },
+  "NOTE": "no git binary on this node - SHA read from .git, but working-tree cleanliness was not verified"
+}
