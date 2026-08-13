@@ -1,0 +1,64 @@
+{
+  "benchmark": "kernel_vs_sdpa",
+  "label": "stage3a-wave-quantization",
+  "provenance": {
+    "utc": "2026-08-13T11:39:15Z",
+    "git_sha": "a5df7ff",
+    "git_branch": "decode-engine",
+    "git_subject": "",
+    "git_dirty": null,
+    "git_available": false,
+    "host": "g012",
+    "python": "3.9.18",
+    "torch": "2.8.0+cu128",
+    "cuda": "12.8",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "sm": "sm_90",
+    "hbm_gb": 85.0
+  },
+  "rows": [
+    {
+      "ctx": 4096,
+      "batch": 1,
+      "kernel": "v4",
+      "ours_ms": 0.019031200408935547,
+      "sdpa_ms": 0.019917279481887817,
+      "ratio": 0.9555120430097873,
+      "kv_gb": 0.016777216,
+      "ours_gbps": 881.5637290080108,
+      "ours_pct_hbm": 26.31533519426898,
+      "max_err": 6.103515625e-05
+    },
+    {
+      "ctx": 16384,
+      "batch": 1,
+      "kernel": "v4",
+      "ours_ms": 0.055234880447387696,
+      "sdpa_ms": 0.038579039573669434,
+      "ratio": 1.4317329062044881,
+      "kv_gb": 0.067108864,
+      "ours_gbps": 1214.9725582174926,
+      "ours_pct_hbm": 36.267837558731124,
+      "max_err": 3.0517578125e-05
+    },
+    {
+      "ctx": 64000,
+      "batch": 1,
+      "kernel": "v4",
+      "ours_ms": 0.1396622371673584,
+      "sdpa_ms": 0.10166607856750488,
+      "ratio": 1.373734869439511,
+      "kv_gb": 0.262144,
+      "ours_gbps": 1876.9855425262213,
+      "ours_pct_hbm": 56.0294191798872,
+      "max_err": 1.52587890625e-05
+    }
+  ],
+  "extra": {
+    "hq": 32,
+    "hkv": 8,
+    "d": 128,
+    "hbm_tbs": 3.35
+  },
+  "NOTE": "no git binary on this node - SHA read from .git, but working-tree cleanliness was not verified"
+}
