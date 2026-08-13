@@ -19,6 +19,13 @@ import subprocess
 import sys
 import sysconfig
 
+# This script lives in cluster/, so sys.path[0] is cluster/ — not the repo root.
+# The package is built in place (no `pip install -e .`, hence no .pth), so add
+# the root ourselves to stay runnable without sourcing cluster/env.sh.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 FAILURES = []
 
 
@@ -86,10 +93,9 @@ def main():
         report(False, "triton", str(exc))
 
     print("== CUDA extension (WS1/WS3/WS4) ==")
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
     built = sorted(os.path.basename(p) for p in
-                   glob.glob(os.path.join(root, "sparse_kv", "_C.*.so")))
+                   glob.glob(os.path.join(REPO_ROOT, "sparse_kv", "_C.*.so")))
     foreign = [b for b in built if not b.endswith(ext_suffix)]
     if foreign:
         report(False, "no foreign-interpreter builds",
@@ -107,7 +113,7 @@ def main():
                "  ({})".format(sys.executable, exc))
 
     print("== CUTLASS headers (WS1/WS3) ==")
-    header = os.path.join(root, "third_party", "cutlass",
+    header = os.path.join(REPO_ROOT, "third_party", "cutlass",
                           "include", "cutlass", "cutlass.h")
     report(os.path.isfile(header), "third_party/cutlass",
            "cluster/setup_env.sh clones it", hard=False)

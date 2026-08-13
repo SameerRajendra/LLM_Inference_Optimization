@@ -30,7 +30,8 @@ git checkout decode-engine
 
 bash cluster/setup_env.sh                     # build deps + CUTLASS + build_ext --inplace
 hf auth login                                 # only for gated meta-llama weights
-/usr/bin/python3.9 cluster/check_env.py       # login-node sanity (GPU checks skipped)
+source cluster/env.sh                         # PYTHON_BIN + PYTHONPATH
+"$PYTHON_BIN" cluster/check_env.py            # login-node sanity (GPU checks skipped)
 ```
 
 `nvcc` (CUDA 12.4, at `/cm/shared/apps/cuda12.4/...`) is already on `PATH` by
@@ -74,6 +75,7 @@ source cluster/env.sh
 | `ImportError: .../_C.cpython-3XX-*.so: undefined symbol: _ZN3c10...` | Wrong interpreter, or a stale `.so` built by another one / against another torch. `rm -f sparse_kv/_C.*.so && rm -rf build`, then rebuild with `"$PYTHON_BIN"`. `check_env.py` now flags foreign builds before the import is attempted. |
 | Two `_C.cpython-*.so` files in `sparse_kv/` | Same cause. Only the one matching `PYTHON_BIN`'s `EXT_SUFFIX` is loadable; delete the rest. |
 | Package versions differ between runs (e.g. transformers 4.57 vs 4.44) | You are hitting two different interpreters' user-sites (`~/.local/lib/python3.9` vs `python3.12`). Use `PYTHON_BIN`. |
+| `ModuleNotFoundError: No module named 'sparse_kv'` while sitting in the repo root | Not a build failure. Scripts get their *own* directory on `sys.path[0]` (`benchmarks/`, `cluster/`), and building in place leaves no `.pth` pointing at the root. `source cluster/env.sh` (exports `PYTHONPATH=$REPO_ROOT`), which the sbatch scripts already do. |
 
 ## Profiling without sudo
 
