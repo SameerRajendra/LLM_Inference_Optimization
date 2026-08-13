@@ -16,6 +16,9 @@ Isolated decode-attention kernel vs PyTorch SDPA (FlashAttention family) on Llam
 | stage1-bank-conflict | 0.0705 | 0.0201 | 3.50x | 7.1% | 0.00006 | `caf92f4` |
 | stage2-v4-kvhead-blocks | 0.0194 | 0.0199 | 0.98x | 25.8% | 0.00006 | `c1da13a` |
 | stage3a-wave-quantization | 0.0190 | 0.0199 | 0.96x | 26.3% | 0.00006 | `a5df7ff` |
+| ws3-fp8-kv | 0.0181 | 0.0202 | 0.90x | 13.8% | 0.00488 | `d2dfaee` |
+| stage4a-tile32-fp16 | 0.0253 | 0.0202 | 1.25x | 19.8% | 0.00006 | `1667b0b` |
+| stage4a-tile32-fp8 | 0.0189 | 0.0202 | 0.93x | 13.2% | 0.00488 | `1667b0b` |
 
 ### Split-KV GQA decode kernel at 16384 context (batch 1, isolated)
 
@@ -25,6 +28,9 @@ Isolated decode-attention kernel vs PyTorch SDPA (FlashAttention family) on Llam
 | stage1-bank-conflict | 0.4069 | 0.0395 | 10.30x | 4.9% | 0.00003 | `caf92f4` |
 | stage2-v4-kvhead-blocks | 0.0733 | 0.0391 | 1.87x | 27.3% | 0.00003 | `c1da13a` |
 | stage3a-wave-quantization | 0.0552 | 0.0386 | 1.43x | 36.3% | 0.00003 | `a5df7ff` |
+| ws3-fp8-kv | 0.0441 | 0.0395 | 1.12x | 22.7% | 0.00194 | `d2dfaee` |
+| stage4a-tile32-fp16 | 0.0613 | 0.0392 | 1.56x | 32.7% | 0.00003 | `1667b0b` |
+| stage4a-tile32-fp8 | 0.0447 | 0.0393 | 1.14x | 22.4% | 0.00194 | `1667b0b` |
 
 ### Split-KV GQA decode kernel at 64000 context (batch 1, isolated)
 
@@ -34,8 +40,11 @@ Isolated decode-attention kernel vs PyTorch SDPA (FlashAttention family) on Llam
 | stage1-bank-conflict | 1.3792 | 0.1013 | 13.62x | 5.7% | 0.00002 | `caf92f4` |
 | stage2-v4-kvhead-blocks | 0.1697 | 0.1017 | 1.67x | 46.1% | 0.00002 | `c1da13a` |
 | stage3a-wave-quantization | 0.1397 | 0.1017 | 1.37x | 56.0% | 0.00002 | `a5df7ff` |
+| ws3-fp8-kv | 0.1251 | 0.1022 | 1.22x | 31.3% | 0.00092 | `d2dfaee` |
+| stage4a-tile32-fp16 | 0.1474 | 0.1016 | 1.45x | 53.1% | 0.00002 | `1667b0b` |
+| stage4a-tile32-fp8 | 0.1372 | 0.1026 | 1.34x | 28.5% | 0.00092 | `1667b0b` |
 
-Raw runs: `results/kernel_vs_sdpa/20260813T054500Z__stage0-baseline__6779c18.json`, `results/kernel_vs_sdpa/20260813T110621Z__stage1-bank-conflict__caf92f4.json`, `results/kernel_vs_sdpa/20260813T112151Z__stage2-v4-kvhead-blocks__c1da13a.json`, `results/kernel_vs_sdpa/20260813T113915Z__stage3a-wave-quantization__a5df7ff.json`
+Raw runs: `results/kernel_vs_sdpa/20260813T110621Z__stage1-bank-conflict__caf92f4.json`, `results/kernel_vs_sdpa/20260813T112151Z__stage2-v4-kvhead-blocks__c1da13a.json`, `results/kernel_vs_sdpa/20260813T113915Z__stage3a-wave-quantization__a5df7ff.json`, `results/kernel_vs_sdpa/20260813T115142Z__ws3-fp8-kv__d2dfaee.json`, `results/kernel_vs_sdpa/20260813T115934Z__stage4a-tile32-fp16__1667b0b.json`, `results/kernel_vs_sdpa/20260813T115936Z__stage4a-tile32-fp8__1667b0b.json`
 
 Rows marked *transcribed* were copied from console output of a run made before result recording existed - the numbers are verbatim but were not captured live.
 
