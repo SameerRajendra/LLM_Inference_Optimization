@@ -557,13 +557,35 @@ torch::Tensor launch_fused_gqa_v4(
                            Q.device().index());
     if (sm_count <= 0) sm_count = 132;
 
-    // Grid is now (Hkv, splits, B) -- Hkv blocks per split, not Hq -- so more
-    // splits are needed to fill the GPU than v3 wanted.
-    const int SPLIT_TOKENS = 512;
+    // ── split count chosen to land on WHOLE WAVES ────────────────────────────
+    // The grid is (Hkv, splits, B), so it contributes Hkv*B blocks per split.
+    // The GPU runs sm_count * blocks_per_sm blocks at once; anything past a
+    // multiple of that leaves a mostly-empty tail wave. At 64K the naive
+    // 512-token target gave 8*125 = 1000 blocks against a 792-block capacity:
+    // one full wave plus a wave only 26% occupied, ~63% effective utilisation.
+    // Rounding the split count to a whole number of waves removes the tail.
+    const int SPLIT_TOKENS = 512;      // preferred tokens per split
     const int MAX_SPLITS   = 512;
-    int splits_by_tokens = (N + SPLIT_TOKENS - 1) / SPLIT_TOKENS;
-    int splits_by_occ    = (2 * sm_count + Hkv * B - 1) / (Hkv * B);
-    int num_splits = std::max(splits_by_tokens, splits_by_occ);
+
+    const int smem_for_occ = static_cast<int>(
+        (2 * TILE_V4 * SMEM_STRIDE + G * HEAD_DIM) * sizeof(__half)
+        + G * TILE_V4 * sizeof(float));
+    cudaFuncSetAttribute(gqa_decode_v4_kernel,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, smem_for_occ);
+    int blocks_per_sm = 0;
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &blocks_per_sm, gqa_decode_v4_kernel, G * WARP_SIZE, smem_for_occ);
+    if (blocks_per_sm <= 0) blocks_per_sm = 1;
+
+    const int blocks_per_split = std::max(1, Hkv * B);
+    const int capacity  = sm_count * blocks_per_sm;          // resident blocks
+    const int per_wave  = std::max(1, capacity / blocks_per_split);
+    const int want      = (N + SPLIT_TOKENS - 1) / SPLIT_TOKENS;
+    const int waves     = std::max(1, (want + per_wave / 2) / per_wave);
+    // Never split finer than one tile, or blocks do less work than a full tile.
+    const int split_cap = std::max(1, N / TILE_V4);
+
+    int num_splits = std::min(waves * per_wave, split_cap);
     num_splits = std::max(1, std::min(num_splits, MAX_SPLITS));
     int split_len = (N + num_splits - 1) / num_splits;
     num_splits    = (N + split_len - 1) / split_len;
@@ -574,12 +596,7 @@ torch::Tensor launch_fused_gqa_v4(
     auto l_partial = torch::empty({B, Hq, num_splits},    f32);
     auto Out       = torch::empty({B, Hq, D}, Q.options());
 
-    // K tile + V tile + Q rows + per-warp score scratch.
-    const int smem = static_cast<int>(
-        (2 * TILE_V4 * SMEM_STRIDE + G * HEAD_DIM) * sizeof(__half)
-        + G * TILE_V4 * sizeof(float));
-    cudaFuncSetAttribute(gqa_decode_v4_kernel,
-                         cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+    const int smem = smem_for_occ;   // K tile + V tile + Q rows + score scratch
 
     dim3 gridA(Hkv, num_splits, B);
     gqa_decode_v4_kernel<<<gridA, dim3(G * WARP_SIZE), smem>>>(
