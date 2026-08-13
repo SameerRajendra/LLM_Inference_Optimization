@@ -87,7 +87,8 @@ def main():
         report(True, "sparse_kv._C importable", ", ".join(syms))
     except ImportError as exc:
         report(False, "sparse_kv._C importable",
-               "pip install -e . --no-build-isolation ({})".format(exc))
+               "python {}.{} - python setup.py build_ext --inplace ({})".format(
+                   sys.version_info.major, sys.version_info.minor, exc))
 
     print("== CUTLASS headers (WS1/WS3) ==")
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
