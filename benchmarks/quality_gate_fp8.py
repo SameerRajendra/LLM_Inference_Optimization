@@ -117,17 +117,39 @@ def restore_sdpa():
     del _PATCHED_MODULES[:]
 
 
-DEFAULT_TEXT = (
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+FALLBACK_TEXT = (
     "The design of high-performance inference systems is governed less by "
     "arithmetic throughput than by the movement of bytes. A modern accelerator "
     "can perform hundreds of teraflops, yet spends most of a decode step "
     "waiting on memory. Every generated token requires re-reading the entire "
     "key-value cache, whose size grows linearly with the length of the "
-    "conversation. As context windows lengthen, this cache comes to dominate "
-    "both the memory capacity of the device and the bandwidth available to it, "
-    "and the practical limit on how many users a single accelerator can serve "
-    "is set by that cache rather than by any measure of computation. "
+    "conversation. "
 )
+
+
+def load_corpus(text_file):
+    """Varied natural prose, long enough to fill the prompt without repeating.
+
+    Repeating one paragraph to reach the prefill length makes the continuation
+    almost deterministic (perplexity ~1.0), and then argmax parity is 100%
+    whatever the quantiser does -- the gate would certify a kernel that was
+    badly wrong. This repo's own documentation is several thousand words of
+    varied English, needs no download, and gives a realistic perplexity.
+    """
+    if text_file:
+        with open(text_file, encoding="utf-8") as f:
+            return f.read()
+    parts = []
+    for rel in ("README.md", "docs/PLAN.md", "cluster/CLUSTER.md",
+                "RESULTS.md", "csrc/kernels/gqa_decode.cu"):
+        p = os.path.join(REPO_ROOT, rel)
+        if os.path.isfile(p):
+            with open(p, encoding="utf-8", errors="ignore") as f:
+                parts.append(f.read())
+    text = "\n\n".join(parts)
+    return text if len(text) > 4000 else (FALLBACK_TEXT * 40)
 
 
 @torch.no_grad()
@@ -170,6 +192,8 @@ def main():
     ap.add_argument("--prefill", type=int, default=2048,
                     help="approximate prompt length in tokens")
     ap.add_argument("--steps", type=int, default=64)
+    ap.add_argument("--text-file", default="",
+                    help="prompt corpus; defaults to this repo's own docs")
     ap.add_argument("--label", default="")
     args = ap.parse_args()
 
@@ -192,8 +216,11 @@ def main():
     if D != 128:
         raise SystemExit("kernel requires head_dim=128; this model has {}".format(D))
 
-    text = DEFAULT_TEXT * (args.prefill // 60 + 2)
+    text = load_corpus(args.text_file)
     ids = tok(text, return_tensors="pt").input_ids[:, :args.prefill].to("cuda")
+    if ids.shape[1] < args.prefill:
+        print("NOTE: corpus yielded only {} tokens (asked {})".format(
+            ids.shape[1], args.prefill))
     print("prefill {} tokens, decoding {} steps\n".format(ids.shape[1], args.steps))
 
     restore_sdpa()
@@ -242,8 +269,23 @@ def main():
     print("delta perplexity: {:+.3f} ({:+.2f}%)".format(
         ppl_fp8 - ppl_ref, 100 * (ppl_fp8 - ppl_ref) / ppl_ref))
 
-    verdict = "PASS" if (parity >= 0.99 and kl < 0.01) else "FAIL"
+    # A near-deterministic continuation (perplexity ~1) makes argmax parity 100%
+    # no matter what the quantiser does, so a pass there certifies nothing. Fail
+    # loudly rather than banking a meaningless green.
+    degenerate = ppl_ref < 2.0
+    if degenerate:
+        verdict = "INCONCLUSIVE"
+    elif parity >= 0.99 and kl < 0.01:
+        verdict = "PASS"
+    else:
+        verdict = "FAIL"
+
     print("\ngate (parity >= 99% and KL < 0.01): {}".format(verdict))
+    if degenerate:
+        print("  reference perplexity is {:.3f} -- the continuation is nearly\n"
+              "  deterministic, so parity is trivially 100% and this run does\n"
+              "  NOT exercise the quantiser. Use varied prose via --text-file."
+              .format(ppl_ref))
 
     save_result("quality_fp8", [{
         "model": args.model, "prefill": int(ids.shape[1]), "steps": args.steps,
