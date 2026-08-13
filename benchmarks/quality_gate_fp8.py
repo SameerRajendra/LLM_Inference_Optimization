@@ -153,32 +153,26 @@ def load_corpus(text_file):
 
 
 @torch.no_grad()
-def run_reference(model, ids, steps):
-    """Greedy decode with exact attention; returns (tokens, logits per step)."""
-    out = model(ids, use_cache=True)
-    cache = out.past_key_values
-    logits = out.logits[:, -1, :].float()
-    toks, all_logits = [], []
-    for _ in range(steps):
-        nxt = logits.argmax(-1, keepdim=True)
-        toks.append(nxt.item())
-        all_logits.append(logits.squeeze(0).clone())
-        out = model(nxt, past_key_values=cache, use_cache=True)
-        cache = out.past_key_values
-        logits = out.logits[:, -1, :].float()
-    return toks, torch.stack(all_logits)
+def run_teacher_forced(model, ids, cont):
+    """Prefill `ids`, then feed the REAL continuation `cont` one token at a time.
 
+    Teacher-forcing on genuine text rather than on the model's own greedy
+    output is the whole point. A greedy continuation is the argmax path by
+    construction, so its perplexity sits near 1.0 for any prompt and the model
+    is overwhelmingly confident at every step -- conditions under which
+    quantisation error can never flip a decision, and parity is 100% no matter
+    how bad the kernel is. Real text keeps the model genuinely uncertain, which
+    is where a quantiser is actually tested.
 
-@torch.no_grad()
-def run_replay(model, ids, tokens):
-    """Feed a fixed token sequence; returns the logits each step produced."""
+    Returns logits[i], the distribution predicting cont[i], one decode step each.
+    """
     out = model(ids, use_cache=True)
     cache = out.past_key_values
     logits = out.logits[:, -1, :].float()
     all_logits = []
-    for t in tokens:
+    for t in cont:
         all_logits.append(logits.squeeze(0).clone())
-        nxt = torch.tensor([[t]], device=ids.device)
+        nxt = torch.tensor([[int(t)]], device=ids.device)
         out = model(nxt, past_key_values=cache, use_cache=True)
         cache = out.past_key_values
         logits = out.logits[:, -1, :].float()
@@ -217,20 +211,24 @@ def main():
         raise SystemExit("kernel requires head_dim=128; this model has {}".format(D))
 
     text = load_corpus(args.text_file)
-    ids = tok(text, return_tensors="pt").input_ids[:, :args.prefill].to("cuda")
-    if ids.shape[1] < args.prefill:
-        print("NOTE: corpus yielded only {} tokens (asked {})".format(
-            ids.shape[1], args.prefill))
-    print("prefill {} tokens, decoding {} steps\n".format(ids.shape[1], args.steps))
+    all_ids = tok(text, return_tensors="pt").input_ids[0]
+    need = args.prefill + args.steps
+    if all_ids.numel() < need:
+        raise SystemExit("corpus gives {} tokens, need {} (prefill+steps); "
+                         "use --text-file".format(all_ids.numel(), need))
+    ids = all_ids[:args.prefill].unsqueeze(0).to("cuda")
+    cont = all_ids[args.prefill:need].tolist()      # REAL text, not generated
+    print("prefill {} tokens, {} teacher-forced steps on real continuation\n"
+          .format(ids.shape[1], len(cont)))
 
     restore_sdpa()
-    ref_toks, ref_logits = run_reference(model, ids, args.steps)
+    ref_logits = run_teacher_forced(model, ids, cont)
 
     install_fp8_sdpa()
     _STATS["intercepted"] = 0
     _STATS["passed_through"] = 0
     try:
-        fp8_logits = run_replay(model, ids, ref_toks)
+        fp8_logits = run_teacher_forced(model, ids, cont)
     finally:
         restore_sdpa()
 
@@ -253,26 +251,29 @@ def main():
     p_fp8 = F.log_softmax(fp8_logits, dim=-1)
     kl = F.kl_div(p_fp8, p_ref, log_target=True, reduction="batchmean").item()
 
-    tgt = torch.tensor(ref_toks, device=ref_logits.device)
+    tgt = torch.tensor(cont, device=ref_logits.device)
     nll_ref = -p_ref.gather(1, tgt.unsqueeze(1)).mean().item()
     nll_fp8 = -p_fp8.gather(1, tgt.unsqueeze(1)).mean().item()
     ppl_ref, ppl_fp8 = math.exp(nll_ref), math.exp(nll_fp8)
+    # How hard the task actually is: if the reference is ~certain everywhere,
+    # parity is unearned regardless of perplexity.
+    top1_conf = p_ref.exp().max(-1).values.mean().item()
 
     print("\n{:<28} {:>12} {:>12}".format("metric", "fp16 (ref)", "fp8 KV"))
     print("-" * 54)
     print("{:<28} {:>12} {:>11.1f}%".format("argmax parity", "100.0%", parity * 100))
     print("{:<28} {:>12} {:>11.1f}%".format("ref top-1 in top-5", "100.0%", top5_hit * 100))
     print("{:<28} {:>12} {:>12.5f}".format("KL(ref || fp8)", "0.00000", kl))
-    print("{:<28} {:>12.3f} {:>12.3f}".format("perplexity of continuation",
+    print("{:<28} {:>12.3f} {:>12.3f}".format("perplexity on real text",
                                               ppl_ref, ppl_fp8))
     print("-" * 54)
     print("delta perplexity: {:+.3f} ({:+.2f}%)".format(
         ppl_fp8 - ppl_ref, 100 * (ppl_fp8 - ppl_ref) / ppl_ref))
+    print("task difficulty: reference mean top-1 confidence {:.1%}".format(top1_conf))
 
-    # A near-deterministic continuation (perplexity ~1) makes argmax parity 100%
-    # no matter what the quantiser does, so a pass there certifies nothing. Fail
-    # loudly rather than banking a meaningless green.
-    degenerate = ppl_ref < 2.0
+    # If the reference is essentially certain at every step, parity is unearned
+    # whatever the quantiser does. Fail loudly rather than bank a hollow green.
+    degenerate = top1_conf > 0.98
     if degenerate:
         verdict = "INCONCLUSIVE"
     elif parity >= 0.99 and kl < 0.01:
@@ -282,16 +283,17 @@ def main():
 
     print("\ngate (parity >= 99% and KL < 0.01): {}".format(verdict))
     if degenerate:
-        print("  reference perplexity is {:.3f} -- the continuation is nearly\n"
-              "  deterministic, so parity is trivially 100% and this run does\n"
-              "  NOT exercise the quantiser. Use varied prose via --text-file."
-              .format(ppl_ref))
+        print("  the reference is {:.1%} confident on average -- it is nearly\n"
+              "  deterministic, so parity is unearned and this run does NOT\n"
+              "  exercise the quantiser. Use higher-entropy prose via "
+              "--text-file.".format(top1_conf))
 
     save_result("quality_fp8", [{
         "model": args.model, "prefill": int(ids.shape[1]), "steps": args.steps,
         "argmax_parity": parity, "top5_hit": top5_hit, "kl_ref_fp8": kl,
         "ppl_ref": ppl_ref, "ppl_fp8": ppl_fp8,
         "ppl_delta_pct": 100 * (ppl_fp8 - ppl_ref) / ppl_ref,
+        "ref_top1_confidence": top1_conf,
         "intercepted": _STATS["intercepted"],
         "passed_through": _STATS["passed_through"],
         "verdict": verdict,
