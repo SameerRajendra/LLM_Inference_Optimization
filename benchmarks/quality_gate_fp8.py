@@ -84,14 +84,37 @@ def _fp8_sdpa(query, key, value, attn_mask=None, dropout_p=0.0,
     return out.unsqueeze(2)                           # [B, H, 1, D]
 
 
+_PATCHED_MODULES = []
+
+
 def install_fp8_sdpa():
     F.scaled_dot_product_attention = _fp8_sdpa
     torch.nn.functional.scaled_dot_product_attention = _fp8_sdpa
+    # transformers' sdpa backend may have bound the function at import time
+    # (`from torch.nn.functional import scaled_dot_product_attention`), in which
+    # case rebinding the module attribute above never reaches the caller and
+    # every decode would silently fall through to exact SDPA. Rebind any module
+    # still holding the original.
+    for name, mod in list(sys.modules.items()):
+        if mod is None or not name.startswith("transformers"):
+            continue
+        try:
+            if getattr(mod, "scaled_dot_product_attention", None) is _ORIG_SDPA:
+                setattr(mod, "scaled_dot_product_attention", _fp8_sdpa)
+                _PATCHED_MODULES.append(mod)
+        except Exception:
+            continue
 
 
 def restore_sdpa():
     F.scaled_dot_product_attention = _ORIG_SDPA
     torch.nn.functional.scaled_dot_product_attention = _ORIG_SDPA
+    for mod in _PATCHED_MODULES:
+        try:
+            setattr(mod, "scaled_dot_product_attention", _ORIG_SDPA)
+        except Exception:
+            continue
+    del _PATCHED_MODULES[:]
 
 
 DEFAULT_TEXT = (

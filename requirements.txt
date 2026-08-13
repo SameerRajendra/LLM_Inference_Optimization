@@ -2,10 +2,12 @@
 # Triton ships inside the torch wheel on Linux; floor only, don't downgrade it.
 triton>=3.2.0
 
-transformers>=4.44.2
+# Qwen3 support (and its tokenizer format) needs a 2025-era transformers;
+# 4.44.2 fails with "did not match any variant of untagged enum ModelWrapper".
+transformers>=4.51
 accelerate>=0.33.0
 bitsandbytes>=0.43.3
-tokenizers>=0.19
+tokenizers>=0.21
 sentencepiece
 einops
 
