@@ -257,7 +257,24 @@ def main():
     ppl_ref, ppl_fp8 = math.exp(nll_ref), math.exp(nll_fp8)
     # How hard the task actually is: if the reference is ~certain everywhere,
     # parity is unearned regardless of perplexity.
-    top1_conf = p_ref.exp().max(-1).values.mean().item()
+    probs_ref = p_ref.exp()
+    conf = probs_ref.max(-1).values                     # per-step top-1 prob
+    top1_conf = conf.mean().item()
+
+    # Raw parity conflates two very different failures: flipping a token the
+    # model was sure about (bad), and flipping a near-tie it was ambivalent
+    # about (harmless, and indistinguishable from sampling noise). Separate
+    # them. `gap` is the reference's top-1 minus top-2 probability -- how much
+    # the decision was actually worth.
+    agree = (ref_am == fp8_am)
+    top2 = probs_ref.topk(2, dim=-1).values
+    gap = (top2[:, 0] - top2[:, 1])
+    confident = conf >= 0.9
+    parity_conf = (agree[confident].float().mean().item()
+                   if confident.any() else float("nan"))
+    n_disagree = int((~agree).sum().item())
+    gap_dis = gap[~agree].mean().item() if n_disagree else 0.0
+    conf_dis = conf[~agree].mean().item() if n_disagree else 0.0
 
     print("\n{:<28} {:>12} {:>12}".format("metric", "fp16 (ref)", "fp8 KV"))
     print("-" * 54)
@@ -270,6 +287,14 @@ def main():
     print("delta perplexity: {:+.3f} ({:+.2f}%)".format(
         ppl_fp8 - ppl_ref, 100 * (ppl_fp8 - ppl_ref) / ppl_ref))
     print("task difficulty: reference mean top-1 confidence {:.1%}".format(top1_conf))
+
+    print("\nwhere the {} disagreements happened:".format(n_disagree))
+    print("  parity on CONFIDENT steps (ref top-1 >= 0.9): {:.1%}".format(parity_conf))
+    if n_disagree:
+        print("  at disagreements, reference top-1 confidence was {:.1%} "
+              "and its\n  margin over top-2 was {:.3f} -- near-ties flip "
+              "harmlessly; confident\n  steps flipping would be a real defect."
+              .format(conf_dis, gap_dis))
 
     # If the reference is essentially certain at every step, parity is unearned
     # whatever the quantiser does. Fail loudly rather than bank a hollow green.
@@ -294,6 +319,10 @@ def main():
         "ppl_ref": ppl_ref, "ppl_fp8": ppl_fp8,
         "ppl_delta_pct": 100 * (ppl_fp8 - ppl_ref) / ppl_ref,
         "ref_top1_confidence": top1_conf,
+        "parity_confident_steps": parity_conf,
+        "n_disagreements": n_disagree,
+        "disagreement_ref_confidence": conf_dis,
+        "disagreement_top1_top2_gap": gap_dis,
         "intercepted": _STATS["intercepted"],
         "passed_through": _STATS["passed_through"],
         "verdict": verdict,
