@@ -177,10 +177,12 @@ def main():
 
     print("loading {} (fp16, sdpa attention)...".format(args.model))
     tok = AutoTokenizer.from_pretrained(args.model)
+    # Deliberately no device_map: that routes through accelerate, which on this
+    # cluster drags in boto3/botocore and dies on a urllib3 2.x incompatibility.
+    # An 8B fp16 model loads fine with a plain .to("cuda").
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, torch_dtype=torch.float16, attn_implementation="sdpa",
-        device_map="cuda")
-    model.eval()
+        args.model, torch_dtype=torch.float16, attn_implementation="sdpa")
+    model = model.to("cuda").eval()
 
     cfg = model.config
     D = getattr(cfg, "head_dim", None) or (cfg.hidden_size // cfg.num_attention_heads)
