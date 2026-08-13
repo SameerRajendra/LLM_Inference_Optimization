@@ -6,7 +6,7 @@
 #   bash cluster/setup_env.sh
 #
 # ------------------------------ knobs -----------------------------------------
-CUDA_MODULE="${CUDA_MODULE:-}"                 # e.g. cuda12.4/toolkit/12.4.1 — leave
+CUDA_MODULE="${CUDA_MODULE:-}"                 # confirmed module name: cuda12.4 — leave
                                                 # empty if nvcc is already on PATH
                                                 # (Bright Cluster Manager profile does
                                                 # this by default on this cluster)
@@ -37,7 +37,7 @@ if "$PYTHON_BIN" -c "import torch" 2>/dev/null; then
 else
     echo "torch not found — installing (adjust TORCH_SPEC/TORCH_INDEX if this cluster needs a different build)."
     "$PYTHON_BIN" -m pip install --user "${TORCH_SPEC:-torch}" \
-        --index-url "${TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
+        --extra-index-url "${TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
 fi
 # Triton ships inside the Linux torch wheel (pytorch-triton) — no extra install.
 "$PYTHON_BIN" -c "import triton; print('triton', triton.__version__)"
