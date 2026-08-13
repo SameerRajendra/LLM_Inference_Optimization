@@ -38,6 +38,7 @@ if os.environ.get("SKIP_CUDA_BUILD") != "1":
                     "csrc/kernels/kv_evict_quant.cu",
                     "csrc/kernels/sparse_attention.cu",
                     "csrc/kernels/gqa_decode.cu",
+                    "csrc/kernels/kv_fp8.cu",
                 ],
                 include_dirs=include_dirs,
                 extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},

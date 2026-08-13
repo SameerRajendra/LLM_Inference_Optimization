@@ -13,7 +13,14 @@ torch::Tensor launch_fused_gqa_v4(
     torch::Tensor Q, torch::Tensor K, torch::Tensor V,
     double scale);
 
+torch::Tensor launch_fused_gqa_v4_fp8(
+    torch::Tensor Q, torch::Tensor Kq, torch::Tensor Vq,
+    torch::Tensor k_scale, torch::Tensor v_scale, double scale);
+
 std::vector<int64_t> gqa_kernel_info(int64_t hq, int64_t hkv);
+
+// kv_fp8.cu
+std::vector<torch::Tensor> quantize_kv_fp8(torch::Tensor K, torch::Tensor V);
 
 // PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 //     m.def("kv_evict_quant_forward", &kv_evict_quant_forward,
@@ -39,4 +46,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gqa_kernel_info", &gqa_kernel_info,
           "[regs3, smem3, blocks_per_sm3, threads3, "
           "regs4, smem4, blocks_per_sm4, threads4, sm_count]");
+    m.def("quantize_kv_fp8", &quantize_kv_fp8,
+          "Quantize fp16 K/V to e4m3 with per-(page, kv_head) scales "
+          "-> {Kq, Vq, k_scale, v_scale}");
+    m.def("fused_gqa_v4_fp8", &launch_fused_gqa_v4_fp8,
+          "GQA decode v4 reading an e4m3 KV cache (half the HBM traffic)");
 }

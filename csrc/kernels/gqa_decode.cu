@@ -28,10 +28,13 @@
 #include <torch/extension.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cuda_fp8.h>
 #include <float.h>
 #include <algorithm>
 #include <cstdint>
 #include <vector>
+
+#include "fp8_common.cuh"
 
 #define HEAD_DIM      128
 #define TILE_SIZE     128
@@ -521,6 +524,161 @@ torch::Tensor launch_fused_gqa(
     return Out;
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// v4-fp8: identical to v4 except K/V arrive as e4m3 and are dequantised on load
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// The kernel is memory-bound (v4 sits at 56% of HBM peak at 64K), so halving
+// the bytes read is worth more than any remaining compute tuning. Only the tile
+// load changes: 16 B of global traffic now carries 16 values instead of 8, and
+// each is scaled back to fp16 in-register before landing in shared. Everything
+// downstream -- qk_dot, the online softmax, the PV accumulation -- is
+// byte-identical to v4, which is deliberate: it keeps the A/B honest, since any
+// timing difference can only come from the traffic.
+//
+// One scale per tile, not per token: the launcher forces split_len to a
+// multiple of KV_PAGE_TOKENS so a tile is exactly one quantisation page.
+static_assert(TILE_V4 == KV_PAGE_TOKENS,
+              "decode tile must equal the quantisation page, or the scale "
+              "lookup below reads the wrong page");
+
+__global__ void gqa_decode_v4_fp8_kernel(
+    const __half*             __restrict__ Q,         // [B, Hq, D]
+    const __nv_fp8_storage_t* __restrict__ Kq,        // [B, N, Hkv, D] e4m3
+    const __nv_fp8_storage_t* __restrict__ Vq,        // [B, N, Hkv, D] e4m3
+    const float*              __restrict__ k_scale,   // [B, pages, Hkv]
+    const float*              __restrict__ v_scale,   // [B, pages, Hkv]
+    float*                    __restrict__ O_partial,
+    float*                    __restrict__ m_partial,
+    float*                    __restrict__ l_partial,
+    int B, int N, int Hq, int Hkv, int D, int G,
+    int num_splits, int split_len, int num_pages, float scale)
+{
+    const int kv_head = blockIdx.x;
+    const int split   = blockIdx.y;
+    const int b       = blockIdx.z;
+    const int tid     = threadIdx.x;
+    const int nthr    = blockDim.x;
+    const int warp_id = tid / WARP_SIZE;
+    const int lane    = tid % WARP_SIZE;
+
+    const int q_head      = kv_head * G + warp_id;
+    const int split_start = split * split_len;
+    const int split_end   = min(split_start + split_len, N);
+    const int base_hs     = (b * Hq + q_head) * num_splits + split;
+
+    extern __shared__ __half smem_f8[];
+    __half (*tile_K)[SMEM_STRIDE] =
+        reinterpret_cast<__half(*)[SMEM_STRIDE]>(smem_f8);
+    __half (*tile_V)[SMEM_STRIDE] =
+        reinterpret_cast<__half(*)[SMEM_STRIDE]>(smem_f8 + TILE_V4 * SMEM_STRIDE);
+    __half* tile_Q = smem_f8 + 2 * TILE_V4 * SMEM_STRIDE;
+    float*  scores = reinterpret_cast<float*>(tile_Q + G * HEAD_DIM);
+    float*  my_scores = scores + warp_id * TILE_V4;
+
+    if (split_start >= split_end) {
+        for (int c = lane; c < D; c += WARP_SIZE)
+            O_partial[base_hs * D + c] = 0.f;
+        if (lane == 0) { m_partial[base_hs] = -FLT_MAX; l_partial[base_hs] = 0.f; }
+        return;
+    }
+
+    for (int i = tid; i < G * HEAD_DIM; i += nthr)
+        tile_Q[i] = Q[b * Hq * D + (kv_head * G + i / HEAD_DIM) * D + i % HEAD_DIM];
+
+    float running_max = -FLT_MAX;
+    float running_sum = 0.f;
+    float acc0 = 0.f, acc1 = 0.f, acc2 = 0.f, acc3 = 0.f;
+
+    const int num_tiles = (split_end - split_start + TILE_V4 - 1) / TILE_V4;
+
+    for (int t = 0; t < num_tiles; t++) {
+        const int tile_start  = split_start + t * TILE_V4;
+        const int tile_tokens = min(TILE_V4, split_end - tile_start);
+
+        // split_len is a multiple of KV_PAGE_TOKENS, so this tile is one page.
+        const int page = tile_start / KV_PAGE_TOKENS;
+        const half2 ks2 = __float2half2_rn(
+            k_scale[(b * num_pages + page) * Hkv + kv_head]);
+        const half2 vs2 = __float2half2_rn(
+            v_scale[(b * num_pages + page) * Hkv + kv_head]);
+
+        __syncthreads();
+
+        // 16 B per thread now carries 16 e4m3 values (vs 8 fp16) -- this is the
+        // entire point: same instruction count, half the bytes.
+        for (int i = tid * 16; i < TILE_V4 * HEAD_DIM; i += nthr * 16) {
+            const int tok_local = i / HEAD_DIM;
+            const int dim       = i % HEAD_DIM;
+            if (tok_local < tile_tokens) {
+                const int off = b * N * Hkv * D + (tile_start + tok_local) * Hkv * D
+                              + kv_head * D + dim;
+                const uint4 kraw = *reinterpret_cast<const uint4*>(Kq + off);
+                const uint4 vraw = *reinterpret_cast<const uint4*>(Vq + off);
+                const uint16_t* kp = reinterpret_cast<const uint16_t*>(&kraw);
+                const uint16_t* vp = reinterpret_cast<const uint16_t*>(&vraw);
+                #pragma unroll
+                for (int j = 0; j < 8; j++) {     // 8 pairs = 16 values
+                    __half2_raw kh = __nv_cvt_fp8x2_to_halfraw2(kp[j], __NV_E4M3);
+                    __half2_raw vh = __nv_cvt_fp8x2_to_halfraw2(vp[j], __NV_E4M3);
+                    *reinterpret_cast<half2*>(&tile_K[tok_local][dim + 2 * j]) =
+                        __hmul2(*reinterpret_cast<half2*>(&kh), ks2);
+                    *reinterpret_cast<half2*>(&tile_V[tok_local][dim + 2 * j]) =
+                        __hmul2(*reinterpret_cast<half2*>(&vh), vs2);
+                }
+            } else {
+                #pragma unroll
+                for (int j = 0; j < 16; j++) {
+                    tile_K[tok_local][dim + j] = __float2half(0.f);
+                    tile_V[tok_local][dim + j] = __float2half(0.f);
+                }
+            }
+        }
+        __syncthreads();
+
+        const __half* qh = tile_Q + warp_id * HEAD_DIM;
+        const float s0 = (lane < tile_tokens)
+                       ? qk_dot(qh, tile_K[lane], scale) : -FLT_MAX;
+        const float s1 = (lane + WARP_SIZE < tile_tokens)
+                       ? qk_dot(qh, tile_K[lane + WARP_SIZE], scale) : -FLT_MAX;
+
+        const float tile_max = warp_reduce_max(fmaxf(s0, s1));
+        const float new_max  = fmaxf(running_max, tile_max);
+        const float rescale  = (running_max == -FLT_MAX) ? 0.f
+                                                         : __expf(running_max - new_max);
+        running_max = new_max;
+
+        const float e0 = (s0 > -FLT_MAX) ? __expf(s0 - running_max) : 0.f;
+        const float e1 = (s1 > -FLT_MAX) ? __expf(s1 - running_max) : 0.f;
+        my_scores[lane] = e0;
+        if (lane + WARP_SIZE < TILE_V4) my_scores[lane + WARP_SIZE] = e1;
+        __syncwarp();
+
+        running_sum = running_sum * rescale + warp_reduce_sum(e0 + e1);
+
+        acc0 *= rescale; acc1 *= rescale; acc2 *= rescale; acc3 *= rescale;
+        for (int tt = 0; tt < tile_tokens; tt++) {
+            const float w = my_scores[tt];
+            const half2 va = *reinterpret_cast<const half2*>(&tile_V[tt][2 * lane]);
+            const half2 vb = *reinterpret_cast<const half2*>(&tile_V[tt][2 * lane + 64]);
+            const float2 fa = __half22float2(va);
+            const float2 fb = __half22float2(vb);
+            acc0 += w * fa.x; acc1 += w * fa.y;
+            acc2 += w * fb.x; acc3 += w * fb.y;
+        }
+    }
+
+    float* out = O_partial + base_hs * D;
+    out[2 * lane]          = acc0;
+    out[2 * lane + 1]      = acc1;
+    out[2 * lane + 64]     = acc2;
+    out[2 * lane + 64 + 1] = acc3;
+    if (lane == 0) {
+        m_partial[base_hs] = running_max;
+        l_partial[base_hs] = running_sum;
+    }
+}
+
 // ─── v4 host launcher ────────────────────────────────────────────────────────
 torch::Tensor launch_fused_gqa_v4(
     torch::Tensor Q,    // [B, Hq, D]      fp16
@@ -620,6 +778,103 @@ torch::Tensor launch_fused_gqa_v4(
     cudaError_t err = cudaGetLastError();
     TORCH_CHECK(err == cudaSuccess,
                 "gqa_decode v4 launch failed: ", cudaGetErrorString(err));
+    return Out;
+}
+
+// ─── v4-fp8 host launcher ────────────────────────────────────────────────────
+torch::Tensor launch_fused_gqa_v4_fp8(
+    torch::Tensor Q,        // [B, Hq, D]          fp16
+    torch::Tensor Kq,       // [B, N, Hkv, D]      uint8 (e4m3)
+    torch::Tensor Vq,       // [B, N, Hkv, D]      uint8 (e4m3)
+    torch::Tensor k_scale,  // [B, num_pages, Hkv] fp32
+    torch::Tensor v_scale,  // [B, num_pages, Hkv] fp32
+    double scale)
+{
+    TORCH_CHECK(Q.is_cuda() && Kq.is_cuda() && Vq.is_cuda(), "inputs must be CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat16, "Q must be fp16");
+    TORCH_CHECK(Kq.dtype() == torch::kUInt8 && Vq.dtype() == torch::kUInt8,
+                "Kq/Vq must be uint8 (e4m3 bits) from quantize_kv_fp8");
+    TORCH_CHECK(k_scale.dtype() == torch::kFloat32 &&
+                v_scale.dtype() == torch::kFloat32, "scales must be fp32");
+    TORCH_CHECK(Q.is_contiguous() && Kq.is_contiguous() && Vq.is_contiguous() &&
+                k_scale.is_contiguous() && v_scale.is_contiguous(),
+                "all inputs must be contiguous");
+
+    const int B   = Q.size(0);
+    const int Hq  = Q.size(1);
+    const int D   = Q.size(2);
+    const int N   = Kq.size(1);
+    const int Hkv = Kq.size(2);
+
+    TORCH_CHECK(D == HEAD_DIM, "fp8 path requires head_dim=128, got ", D);
+    TORCH_CHECK(Hq % Hkv == 0, "Hq must be divisible by Hkv");
+    const int G = Hq / Hkv;
+    TORCH_CHECK(G >= 1 && G <= 32, "requires 1 <= Hq/Hkv <= 32, got ", G);
+    TORCH_CHECK(Vq.size(1) == N && Vq.size(2) == Hkv, "Vq must match Kq");
+
+    const int num_pages = (N + KV_PAGE_TOKENS - 1) / KV_PAGE_TOKENS;
+    TORCH_CHECK(k_scale.size(1) == num_pages && v_scale.size(1) == num_pages,
+                "scale pages (", k_scale.size(1), ") disagree with N=", N,
+                " at ", KV_PAGE_TOKENS, " tokens/page (expected ", num_pages, ")");
+
+    int sm_count = 0;
+    cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount,
+                           Q.device().index());
+    if (sm_count <= 0) sm_count = 132;
+
+    const int smem = static_cast<int>(
+        (2 * TILE_V4 * SMEM_STRIDE + G * HEAD_DIM) * sizeof(__half)
+        + G * TILE_V4 * sizeof(float));
+    cudaFuncSetAttribute(gqa_decode_v4_fp8_kernel,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+    int blocks_per_sm = 0;
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &blocks_per_sm, gqa_decode_v4_fp8_kernel, G * WARP_SIZE, smem);
+    if (blocks_per_sm <= 0) blocks_per_sm = 1;
+
+    const int SPLIT_TOKENS = 512;
+    const int MAX_SPLITS   = 512;
+    const int blocks_per_split = std::max(1, Hkv * B);
+    const int per_wave = std::max(1, (sm_count * blocks_per_sm) / blocks_per_split);
+    const int want     = (N + SPLIT_TOKENS - 1) / SPLIT_TOKENS;
+    const int waves    = std::max(1, (want + per_wave / 2) / per_wave);
+    const int split_cap = std::max(1, N / TILE_V4);
+
+    int num_splits = std::min(waves * per_wave, split_cap);
+    num_splits = std::max(1, std::min(num_splits, MAX_SPLITS));
+    int split_len = (N + num_splits - 1) / num_splits;
+    // Round up so every tile is exactly one quantisation page -- the kernel
+    // loads one scale per tile and would otherwise straddle two pages.
+    split_len = ((split_len + KV_PAGE_TOKENS - 1) / KV_PAGE_TOKENS) * KV_PAGE_TOKENS;
+    num_splits = (N + split_len - 1) / split_len;
+
+    auto f32 = torch::TensorOptions().dtype(torch::kFloat32).device(Q.device());
+    auto O_partial = torch::empty({B, Hq, num_splits, D}, f32);
+    auto m_partial = torch::empty({B, Hq, num_splits},    f32);
+    auto l_partial = torch::empty({B, Hq, num_splits},    f32);
+    auto Out       = torch::empty({B, Hq, D}, Q.options());
+
+    dim3 gridA(Hkv, num_splits, B);
+    gqa_decode_v4_fp8_kernel<<<gridA, dim3(G * WARP_SIZE), smem>>>(
+        reinterpret_cast<const __half*>(Q.data_ptr<at::Half>()),
+        reinterpret_cast<const __nv_fp8_storage_t*>(Kq.data_ptr<uint8_t>()),
+        reinterpret_cast<const __nv_fp8_storage_t*>(Vq.data_ptr<uint8_t>()),
+        k_scale.data_ptr<float>(), v_scale.data_ptr<float>(),
+        O_partial.data_ptr<float>(), m_partial.data_ptr<float>(),
+        l_partial.data_ptr<float>(),
+        B, N, Hq, Hkv, D, G, num_splits, split_len, num_pages,
+        static_cast<float>(scale));
+
+    dim3 gridB(Hq, B);
+    gqa_combine_kernel<<<gridB, dim3(D)>>>(
+        O_partial.data_ptr<float>(), m_partial.data_ptr<float>(),
+        l_partial.data_ptr<float>(),
+        reinterpret_cast<__half*>(Out.data_ptr<at::Half>()),
+        B, Hq, D, num_splits);
+
+    cudaError_t err = cudaGetLastError();
+    TORCH_CHECK(err == cudaSuccess,
+                "gqa_decode v4-fp8 launch failed: ", cudaGetErrorString(err));
     return Out;
 }
 

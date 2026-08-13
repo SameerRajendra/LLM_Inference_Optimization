@@ -32,17 +32,16 @@ from bench_common import save_result          # noqa: E402
 _ap = argparse.ArgumentParser()
 _ap.add_argument("--label", default="",
                  help="names this run in results/ (e.g. stage1-bank-conflict)")
-_ap.add_argument("--kernel", default="v3", choices=["v3", "v4"],
-                 help="v3 = block per query head; v4 = block per KV head")
+_ap.add_argument("--kernel", default="v3", choices=["v3", "v4", "v4_fp8"],
+                 help="v3 = block per query head; v4 = block per KV head; "
+                      "v4_fp8 = v4 reading an e4m3 KV cache")
 _args = _ap.parse_args()
 
-if _args.kernel == "v4":
-    if not hasattr(_C, "fused_gqa_v4"):
-        raise SystemExit("fused_gqa_v4 not in the extension - rebuild: "
-                         "python setup.py build_ext --inplace")
-    fused_gqa = _C.fused_gqa_v4
-else:
-    fused_gqa = _C.fused_gqa
+_needed = {"v4": "fused_gqa_v4", "v4_fp8": "fused_gqa_v4_fp8"}.get(_args.kernel)
+if _needed and not hasattr(_C, _needed):
+    raise SystemExit("{} not in the extension - rebuild: "
+                     "python setup.py build_ext --inplace".format(_needed))
+FP8 = _args.kernel == "v4_fp8"
 
 if hasattr(_C, "gqa_kernel_info"):
     _i = _C.gqa_kernel_info(32, 8)
@@ -80,9 +79,11 @@ def timed(fn, warmup=25, iters=200):
     return s.elapsed_time(e) / iters
 
 
-print(f"{'ctx':>8} {'v3(ms)':>10} {'SDPA(ms)':>10} {'v3/SDPA':>9} "
-      f"{'v3 GB/s':>9} {'%HBM':>7} {'max_err':>9}")
-print("-" * 72)
+print(f"kernel: {_args.kernel}"
+      f"{'  (KV stored as e4m3 - half the bytes)' if FP8 else ''}\n")
+print(f"{'ctx':>8} {'ours(ms)':>10} {'SDPA(ms)':>10} {'vs SDPA':>9} "
+      f"{'GB/s':>9} {'%HBM':>7} {'max_err':>9} {'cosine':>8}")
+print("-" * 81)
 
 rows = []
 for N in CTX:
@@ -108,32 +109,51 @@ for N in CTX:
         Ve = Vs[:, :, None].expand(B, Hkv, n, N, D).reshape(B, Hq, N, D).contiguous()
         sdpa_fn = lambda: F.scaled_dot_product_attention(Qs, Ke, Ve, scale=scale)
 
-    v3_fn = lambda: fused_gqa(Q, Kc, Vc, scale)
+    if FP8:
+        # Quantise ONCE, outside the timed region: in a real engine the cache is
+        # written in fp8 at append time, so paying for it per decode step would
+        # measure the wrong thing.
+        Kq, Vq, k_s, v_s = _C.quantize_kv_fp8(Kc, Vc)
+        v3_fn = lambda: _C.fused_gqa_v4_fp8(Q, Kq, Vq, k_s, v_s, scale)
+    elif _args.kernel == "v4":
+        v3_fn = lambda: _C.fused_gqa_v4(Q, Kc, Vc, scale)
+    else:
+        v3_fn = lambda: _C.fused_gqa(Q, Kc, Vc, scale)
 
     # correctness (custom vs SDPA)
-    o_v3  = fused_gqa(Q, Kc, Vc, scale)            # [B, Hq, D]
+    o_v3  = v3_fn()                                # [B, Hq, D]
     o_ref = sdpa_fn().squeeze(2)                   # [B, Hq, D]
     max_err = (o_v3.float() - o_ref.float()).abs().max().item()
+    # FP8 is lossy, so an absolute error bound says little; cosine against the
+    # exact SDPA output is what tracks whether the sampled token would change.
+    cos = torch.nn.functional.cosine_similarity(
+        o_v3.float().flatten(), o_ref.float().flatten(), dim=0).item()
 
     v3_ms   = timed(v3_fn)
     sdpa_ms = timed(sdpa_fn)
 
-    kv_bytes = 2 * N * Hkv * D * 2                 # K+V fp16, un-repeated
+    # Bytes the kernel must actually move: 1 B/elem for e4m3, 2 B for fp16.
+    elem_bytes = 1 if FP8 else 2
+    kv_bytes = 2 * N * Hkv * D * elem_bytes        # K+V, un-repeated
     gbps = kv_bytes / (v3_ms * 1e-3) / 1e9
     pct  = gbps / (HBM_TBs * 1000.0) * 100.0
 
     print(f"{N:>8} {v3_ms:>10.4f} {sdpa_ms:>10.4f} {v3_ms/sdpa_ms:>8.2f}x "
-          f"{gbps:>9.0f} {pct:>6.1f}% {max_err:>9.5f}")
+          f"{gbps:>9.0f} {pct:>6.1f}% {max_err:>9.5f} {cos:>8.5f}")
 
     rows.append({"ctx": N, "batch": B, "kernel": _args.kernel,
                  "ours_ms": v3_ms, "sdpa_ms": sdpa_ms,
                  "ratio": v3_ms / sdpa_ms,
                  "kv_gb": kv_bytes / 1e9,
+                 "kv_elem_bytes": elem_bytes,
                  "ours_gbps": gbps, "ours_pct_hbm": pct,
-                 "max_err": max_err})
+                 "max_err": max_err, "cosine_vs_sdpa": cos})
 
-print("-" * 72)
-print("v3/SDPA < 1.0 = our kernel is faster;  %HBM = fraction of peak bandwidth used")
+print("-" * 81)
+print("vs SDPA < 1.0 = our kernel is faster;  %HBM = fraction of peak bandwidth used")
+print("GB/s counts the bytes THIS kernel moves (e4m3 = 1 B/elem, fp16 = 2 B/elem),")
+print("so the fp8 row being faster at similar %HBM is the point: fewer bytes, not")
+print("better efficiency. cosine is vs exact SDPA — the quality cost of fp8.")
 print("(single decode step, batch=1, isolated — no model, no eager overhead)")
 
 save_result("kernel_vs_sdpa", rows, label=_args.label,
