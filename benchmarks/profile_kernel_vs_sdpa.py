@@ -26,13 +26,34 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sparse_kv._C import fused_gqa            # noqa: E402
+import sparse_kv._C as _C                     # noqa: E402
 from bench_common import save_result          # noqa: E402
 
 _ap = argparse.ArgumentParser()
 _ap.add_argument("--label", default="",
                  help="names this run in results/ (e.g. stage1-bank-conflict)")
+_ap.add_argument("--kernel", default="v3", choices=["v3", "v4"],
+                 help="v3 = block per query head; v4 = block per KV head")
 _args = _ap.parse_args()
+
+if _args.kernel == "v4":
+    if not hasattr(_C, "fused_gqa_v4"):
+        raise SystemExit("fused_gqa_v4 not in the extension - rebuild: "
+                         "python setup.py build_ext --inplace")
+    fused_gqa = _C.fused_gqa_v4
+else:
+    fused_gqa = _C.fused_gqa
+
+if hasattr(_C, "gqa_kernel_info"):
+    _i = _C.gqa_kernel_info(32, 8)
+    print("kernel occupancy (from the CUDA runtime, no profiler needed):")
+    print("  v3: {:>3} regs, {:>6} B smem, {} blocks/SM x {} thr = {} thr/SM "
+          "({:.1f}% of 2048)".format(
+              _i[0], _i[1], _i[2], _i[3], _i[2] * _i[3], _i[2] * _i[3] / 20.48))
+    print("  v4: {:>3} regs, {:>6} B smem, {} blocks/SM x {} thr = {} thr/SM "
+          "({:.1f}% of 2048)".format(
+              _i[4], _i[5], _i[6], _i[7], _i[6] * _i[7], _i[6] * _i[7] / 20.48))
+    print("  SMs: {}\n".format(_i[8]))
 
 torch.manual_seed(0)
 dev = "cuda"
@@ -104,7 +125,7 @@ for N in CTX:
     print(f"{N:>8} {v3_ms:>10.4f} {sdpa_ms:>10.4f} {v3_ms/sdpa_ms:>8.2f}x "
           f"{gbps:>9.0f} {pct:>6.1f}% {max_err:>9.5f}")
 
-    rows.append({"ctx": N, "batch": B,
+    rows.append({"ctx": N, "batch": B, "kernel": _args.kernel,
                  "ours_ms": v3_ms, "sdpa_ms": sdpa_ms,
                  "ratio": v3_ms / sdpa_ms,
                  "kv_gb": kv_bytes / 1e9,

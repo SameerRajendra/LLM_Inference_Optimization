@@ -30,6 +30,8 @@
 #include <cuda_fp16.h>
 #include <float.h>
 #include <algorithm>
+#include <cstdint>
+#include <vector>
 
 #define HEAD_DIM      128
 #define TILE_SIZE     128
@@ -243,6 +245,191 @@ __global__ void gqa_combine_kernel(
     Out[hb * D + tid] = __float2half_rn(acc * inv);
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// v4: one block per KV HEAD (not per query head), one warp per query head
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Two measured problems with the v3 kernel above, both provable from its launch
+// config rather than from a profiler (this cluster has no Nsight Compute
+// counter access):
+//
+//   1. 4x redundant HBM traffic. v3's grid is (Hq, splits, B) and derives
+//      kv_head = q_head / G, so the G=4 query-head blocks of a group each load
+//      the SAME K/V tile. At 64K that is 1.02 GB of load requests against
+//      262 MB of unique KV.
+//
+//   2. 18.75% occupancy. v3 uses 2*128*130*2 B = 65 KB of shared per block, so
+//      only floor(228/65) = 3 blocks fit per SM; at 128 threads that is 384 of
+//      2048 threads = 12 warps, far too few to hide ~500-cycle global latency
+//      behind the serial FMA chains in the score and accumulate loops.
+//
+// v4 fixes both with one restructure: the block is indexed by kv_head, so each
+// K/V tile is fetched ONCE and shared by all G query heads (4x less traffic),
+// and the tile is halved to 64 tokens so shared drops to ~34 KB and 6 blocks
+// fit per SM. One warp owns one query head, which makes the whole online
+// softmax a warp-shuffle reduction -- no __syncthreads at all in the softmax,
+// down from ~9 barriers per tile to 2.
+//
+// Work assignment inside a block:
+//   warp w        -> query head kv_head*G + w
+//   lane l        -> tokens {l, l+32} of the 64-token tile (2 scores)
+//   lane l output -> channels {2l, 2l+1} and {2l+64, 2l+65}  (4 of 128)
+//
+// Shared-memory banking (stride 130 halfs = 260 B, as in v3):
+//   score read  tile_K[l][d]     -> bank (l*65 + d/2) % 32   distinct per lane
+//   value read  tile_V[t][2l]    -> bank (t*65 + l)   % 32   distinct per lane
+// Both conflict-free. Global loads are uint4 (16 B); the shared stores are
+// half2 because a 260 B row stride is 4-byte but not 16-byte aligned, and the
+// global side is the expensive one.
+
+#define TILE_V4 64
+#define VEC_HALF 8                     // uint4 = 8 halfs
+
+// One query-head row against one K row. Q is read broadcast (same address for
+// every lane); K is read at tile_K[tok][d] with tok distinct per lane, which
+// the padded stride keeps conflict-free.
+__device__ __forceinline__ float qk_dot(const __half* __restrict__ qh,
+                                        const __half* __restrict__ krow,
+                                        float scale) {
+    float dot = 0.f;
+    #pragma unroll
+    for (int d = 0; d < HEAD_DIM; d += 2) {
+        const half2 q2 = *reinterpret_cast<const half2*>(&qh[d]);
+        const half2 k2 = *reinterpret_cast<const half2*>(&krow[d]);
+        const float2 qf = __half22float2(q2);
+        const float2 kf = __half22float2(k2);
+        dot += qf.x * kf.x + qf.y * kf.y;
+    }
+    return dot * scale;
+}
+
+__global__ void gqa_decode_v4_kernel(
+    const __half* __restrict__ Q,          // [B, Hq, D]
+    const __half* __restrict__ K,          // [B, N, Hkv, D]
+    const __half* __restrict__ V,          // [B, N, Hkv, D]
+    float*        __restrict__ O_partial,  // [B, Hq, S, D]  unnormalized
+    float*        __restrict__ m_partial,  // [B, Hq, S]
+    float*        __restrict__ l_partial,  // [B, Hq, S]
+    int B, int N, int Hq, int Hkv, int D, int G,
+    int num_splits, int split_len, float scale)
+{
+    const int kv_head = blockIdx.x;
+    const int split   = blockIdx.y;
+    const int b       = blockIdx.z;
+    const int tid     = threadIdx.x;
+    const int nthr    = blockDim.x;          // G * 32
+    const int warp_id = tid / WARP_SIZE;
+    const int lane    = tid % WARP_SIZE;
+
+    const int q_head  = kv_head * G + warp_id;
+
+    const int split_start = split * split_len;
+    const int split_end   = min(split_start + split_len, N);
+    const int base_hs     = (b * Hq + q_head) * num_splits + split;
+
+    extern __shared__ __half smem_v4[];
+    __half (*tile_K)[SMEM_STRIDE] =
+        reinterpret_cast<__half(*)[SMEM_STRIDE]>(smem_v4);
+    __half (*tile_V)[SMEM_STRIDE] =
+        reinterpret_cast<__half(*)[SMEM_STRIDE]>(smem_v4 + TILE_V4 * SMEM_STRIDE);
+    __half* tile_Q = smem_v4 + 2 * TILE_V4 * SMEM_STRIDE;              // [G][D]
+    float*  scores = reinterpret_cast<float*>(tile_Q + G * HEAD_DIM);  // [G][TILE]
+    float*  my_scores = scores + warp_id * TILE_V4;
+
+    if (split_start >= split_end) {                    // over-provisioned split
+        for (int c = lane; c < D; c += WARP_SIZE)
+            O_partial[base_hs * D + c] = 0.f;
+        if (lane == 0) { m_partial[base_hs] = -FLT_MAX; l_partial[base_hs] = 0.f; }
+        return;
+    }
+
+    // Q for every query head of this group, read broadcast-style in the dot.
+    for (int i = tid; i < G * HEAD_DIM; i += nthr)
+        tile_Q[i] = Q[b * Hq * D + (kv_head * G + i / HEAD_DIM) * D + i % HEAD_DIM];
+
+    float running_max = -FLT_MAX;
+    float running_sum = 0.f;
+    float acc0 = 0.f, acc1 = 0.f, acc2 = 0.f, acc3 = 0.f;   // channels 2l,2l+1,2l+64,2l+65
+
+    const int num_tiles = (split_end - split_start + TILE_V4 - 1) / TILE_V4;
+
+    for (int t = 0; t < num_tiles; t++) {
+        const int tile_start  = split_start + t * TILE_V4;
+        const int tile_tokens = min(TILE_V4, split_end - tile_start);
+
+        __syncthreads();                     // previous tile fully consumed
+
+        // ---- cooperative vectorized load: uint4 from global, half2 to shared ----
+        for (int i = tid * VEC_HALF; i < TILE_V4 * HEAD_DIM; i += nthr * VEC_HALF) {
+            const int tok_local = i / HEAD_DIM;
+            const int dim       = i % HEAD_DIM;
+            const int tok_glob  = tile_start + tok_local;
+            if (tok_local < tile_tokens) {
+                const int off = b * N * Hkv * D + tok_glob * Hkv * D + kv_head * D + dim;
+                const uint4 kv = *reinterpret_cast<const uint4*>(K + off);
+                const uint4 vv = *reinterpret_cast<const uint4*>(V + off);
+                #pragma unroll
+                for (int j = 0; j < 4; j++) {
+                    reinterpret_cast<uint32_t*>(&tile_K[tok_local][dim])[j] =
+                        reinterpret_cast<const uint32_t*>(&kv)[j];
+                    reinterpret_cast<uint32_t*>(&tile_V[tok_local][dim])[j] =
+                        reinterpret_cast<const uint32_t*>(&vv)[j];
+                }
+            } else {
+                #pragma unroll
+                for (int j = 0; j < VEC_HALF; j++) {
+                    tile_K[tok_local][dim + j] = __float2half(0.f);
+                    tile_V[tok_local][dim + j] = __float2half(0.f);
+                }
+            }
+        }
+        __syncthreads();
+
+        // ---- scores: lane owns tokens {lane, lane+32}; pure warp reduction ----
+        const __half* qh = tile_Q + warp_id * HEAD_DIM;
+        const float s0 = (lane < tile_tokens)
+                       ? qk_dot(qh, tile_K[lane], scale) : -FLT_MAX;
+        const float s1 = (lane + WARP_SIZE < tile_tokens)
+                       ? qk_dot(qh, tile_K[lane + WARP_SIZE], scale) : -FLT_MAX;
+
+        const float tile_max = warp_reduce_max(fmaxf(s0, s1));
+        const float new_max  = fmaxf(running_max, tile_max);
+        const float rescale  = (running_max == -FLT_MAX) ? 0.f
+                                                         : __expf(running_max - new_max);
+        running_max = new_max;
+
+        const float e0 = (s0 > -FLT_MAX) ? __expf(s0 - running_max) : 0.f;
+        const float e1 = (s1 > -FLT_MAX) ? __expf(s1 - running_max) : 0.f;
+        my_scores[lane] = e0;
+        if (lane + WARP_SIZE < TILE_V4) my_scores[lane + WARP_SIZE] = e1;
+        __syncwarp();
+
+        running_sum = running_sum * rescale + warp_reduce_sum(e0 + e1);
+
+        // ---- accumulate PV: half2 reads keep every lane on its own bank ----
+        acc0 *= rescale; acc1 *= rescale; acc2 *= rescale; acc3 *= rescale;
+        for (int tt = 0; tt < tile_tokens; tt++) {
+            const float w = my_scores[tt];
+            const half2 va = *reinterpret_cast<const half2*>(&tile_V[tt][2 * lane]);
+            const half2 vb = *reinterpret_cast<const half2*>(&tile_V[tt][2 * lane + 64]);
+            const float2 fa = __half22float2(va);
+            const float2 fb = __half22float2(vb);
+            acc0 += w * fa.x; acc1 += w * fa.y;
+            acc2 += w * fb.x; acc3 += w * fb.y;
+        }
+    }
+
+    float* out = O_partial + base_hs * D;
+    out[2 * lane]          = acc0;
+    out[2 * lane + 1]      = acc1;
+    out[2 * lane + 64]     = acc2;
+    out[2 * lane + 64 + 1] = acc3;
+    if (lane == 0) {
+        m_partial[base_hs] = running_max;
+        l_partial[base_hs] = running_sum;
+    }
+}
+
 // ─── host launcher ───────────────────────────────────────────────────────────
 torch::Tensor launch_fused_gqa(
     torch::Tensor Q,    // [B, Hq, D]      fp16
@@ -332,4 +519,124 @@ torch::Tensor launch_fused_gqa(
                 "gqa_decode split-KV launch failed: ",
                 cudaGetErrorString(err));
     return Out;
+}
+
+// ─── v4 host launcher ────────────────────────────────────────────────────────
+torch::Tensor launch_fused_gqa_v4(
+    torch::Tensor Q,    // [B, Hq, D]      fp16
+    torch::Tensor K,    // [B, N, Hkv, D]  fp16
+    torch::Tensor V,    // [B, N, Hkv, D]  fp16
+    double scale)
+{
+    TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(),
+                "Q/K/V must be CUDA tensors");
+    TORCH_CHECK(Q.dtype() == torch::kFloat16 &&
+                K.dtype() == torch::kFloat16 &&
+                V.dtype() == torch::kFloat16, "all inputs must be fp16");
+    TORCH_CHECK(Q.is_contiguous() && K.is_contiguous() && V.is_contiguous(),
+                "all inputs must be contiguous");
+
+    const int B   = Q.size(0);
+    const int Hq  = Q.size(1);
+    const int D   = Q.size(2);
+    const int N   = K.size(1);
+    const int Hkv = K.size(2);
+
+    TORCH_CHECK(D == HEAD_DIM, "v4 requires head_dim=128, got ", D);
+    TORCH_CHECK(Hq % Hkv == 0, "Hq=", Hq, " must be divisible by Hkv=", Hkv);
+    const int G = Hq / Hkv;
+    // One warp per query head of the group, so the softmax reduction stays
+    // inside a warp. G>32 would exceed 1024 threads/block.
+    TORCH_CHECK(G >= 1 && G <= 32, "v4 requires 1 <= Hq/Hkv <= 32, got ", G);
+    TORCH_CHECK(K.size(3) == D && V.size(3) == D, "K/V head_dim must equal ", D);
+    TORCH_CHECK(V.size(1) == N && V.size(2) == Hkv,
+                "V shape must be [B, N, Hkv, D] matching K");
+
+    int sm_count = 0;
+    cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount,
+                           Q.device().index());
+    if (sm_count <= 0) sm_count = 132;
+
+    // Grid is now (Hkv, splits, B) -- Hkv blocks per split, not Hq -- so more
+    // splits are needed to fill the GPU than v3 wanted.
+    const int SPLIT_TOKENS = 512;
+    const int MAX_SPLITS   = 512;
+    int splits_by_tokens = (N + SPLIT_TOKENS - 1) / SPLIT_TOKENS;
+    int splits_by_occ    = (2 * sm_count + Hkv * B - 1) / (Hkv * B);
+    int num_splits = std::max(splits_by_tokens, splits_by_occ);
+    num_splits = std::max(1, std::min(num_splits, MAX_SPLITS));
+    int split_len = (N + num_splits - 1) / num_splits;
+    num_splits    = (N + split_len - 1) / split_len;
+
+    auto f32 = torch::TensorOptions().dtype(torch::kFloat32).device(Q.device());
+    auto O_partial = torch::empty({B, Hq, num_splits, D}, f32);
+    auto m_partial = torch::empty({B, Hq, num_splits},    f32);
+    auto l_partial = torch::empty({B, Hq, num_splits},    f32);
+    auto Out       = torch::empty({B, Hq, D}, Q.options());
+
+    // K tile + V tile + Q rows + per-warp score scratch.
+    const int smem = static_cast<int>(
+        (2 * TILE_V4 * SMEM_STRIDE + G * HEAD_DIM) * sizeof(__half)
+        + G * TILE_V4 * sizeof(float));
+    cudaFuncSetAttribute(gqa_decode_v4_kernel,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+
+    dim3 gridA(Hkv, num_splits, B);
+    gqa_decode_v4_kernel<<<gridA, dim3(G * WARP_SIZE), smem>>>(
+        reinterpret_cast<const __half*>(Q.data_ptr<at::Half>()),
+        reinterpret_cast<const __half*>(K.data_ptr<at::Half>()),
+        reinterpret_cast<const __half*>(V.data_ptr<at::Half>()),
+        O_partial.data_ptr<float>(),
+        m_partial.data_ptr<float>(),
+        l_partial.data_ptr<float>(),
+        B, N, Hq, Hkv, D, G, num_splits, split_len,
+        static_cast<float>(scale));
+
+    dim3 gridB(Hq, B);
+    gqa_combine_kernel<<<gridB, dim3(D)>>>(          // unchanged from v3
+        O_partial.data_ptr<float>(),
+        m_partial.data_ptr<float>(),
+        l_partial.data_ptr<float>(),
+        reinterpret_cast<__half*>(Out.data_ptr<at::Half>()),
+        B, Hq, D, num_splits);
+
+    cudaError_t err = cudaGetLastError();
+    TORCH_CHECK(err == cudaSuccess,
+                "gqa_decode v4 launch failed: ", cudaGetErrorString(err));
+    return Out;
+}
+
+// ─── occupancy introspection ─────────────────────────────────────────────────
+// Nsight Compute counters are unavailable on this cluster (no sudo), so expose
+// the launch-config facts the CUDA runtime will tell us for free: registers,
+// shared memory, and blocks resident per SM. This is what actually decides
+// latency hiding, and it needs no profiling permissions.
+std::vector<int64_t> gqa_kernel_info(int64_t hq, int64_t hkv) {
+    const int G = static_cast<int>(hq / hkv);
+    int sm_count = 0;
+    cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, 0);
+
+    cudaFuncAttributes a3{}, a4{};
+    cudaFuncGetAttributes(&a3, gqa_decode_splitkv_kernel);
+    cudaFuncGetAttributes(&a4, gqa_decode_v4_kernel);
+
+    const int smem3 = 2 * TILE_SIZE * SMEM_STRIDE * sizeof(__half);
+    const int smem4 = (2 * TILE_V4 * SMEM_STRIDE + G * HEAD_DIM) * sizeof(__half)
+                    + G * TILE_V4 * sizeof(float);
+    cudaFuncSetAttribute(gqa_decode_splitkv_kernel,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, smem3);
+    cudaFuncSetAttribute(gqa_decode_v4_kernel,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, smem4);
+
+    int blocks3 = 0, blocks4 = 0;
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &blocks3, gqa_decode_splitkv_kernel, BLOCK_THREADS, smem3);
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &blocks4, gqa_decode_v4_kernel, G * WARP_SIZE, smem4);
+
+    return {static_cast<int64_t>(a3.numRegs), static_cast<int64_t>(smem3),
+            static_cast<int64_t>(blocks3), static_cast<int64_t>(BLOCK_THREADS),
+            static_cast<int64_t>(a4.numRegs), static_cast<int64_t>(smem4),
+            static_cast<int64_t>(blocks4), static_cast<int64_t>(G * WARP_SIZE),
+            static_cast<int64_t>(sm_count)};
 }
