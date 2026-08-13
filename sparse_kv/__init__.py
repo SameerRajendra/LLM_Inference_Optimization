@@ -9,8 +9,10 @@ try:
     CUDA_AVAILABLE = True
 except (ImportError, ModuleNotFoundError) as e:
     CUDA_AVAILABLE = False
+    import sys
     import warnings
     warnings.warn(f"[sparse_kv] CUDA extension not loaded: {e}. "
-                  "Run: pip install -e . --no-build-isolation")
+                  f"Rebuild for this interpreter ({sys.executable}): "
+                  f"{sys.executable} setup.py build_ext --inplace")
 
 __all__ = ["sparse_attention", "fused_kv_evict", "kv_evict_quant_forward"]

@@ -5,22 +5,32 @@ cluster → build/test/benchmark via Slurm.** Nothing is ever executed locally.
 
 ## One-time setup (login node)
 
-This cluster's `python3` is a shared, non-writeable install (`Defaulting to
-user installation because normal site-packages is not writeable`) that already
+This cluster's Python is a shared, non-writeable install (`Defaulting to user
+installation because normal site-packages is not writeable`) that already
 carries torch 2.8.0+cu128, Triton 3.4.0, and transformers — so there's no venv.
 Everything installs to `~/.local` and the CUDA extension builds **in place**
 (`setup.py build_ext --inplace`), not via `pip install -e .` — pip 21.2.3 here
 recurses `setuptools develop` through itself and fails; `build_ext --inplace`
 sidesteps that entirely and is the verified-working path (2026-08-12).
 
+> **Always invoke this project as `/usr/bin/python3.9`, never bare `python3`.**
+> There are three Pythons visible here and the name resolves differently per
+> node: on login nodes `python3` is `/usr/bin/python3.9`, on compute nodes it is
+> `~/.localpython3.12/bin/python3` (3.12.6), and `python` is `/usr/bin/python`.
+> A CPython extension is ABI-locked to the interpreter that built it, so the
+> wrong one loads the wrong `_C.cpython-3XX-*.so` and dies with
+> `undefined symbol: _ZN3c10...`. `cluster/env.sh` exports `PYTHON_BIN` and
+> every job script uses it; override with `PYTHON_BIN=... sbatch ...` if you
+> ever move to 3.12 (then rebuild — see below).
+
 ```bash
 git clone https://github.com/SameerRajendra/LLM_Inference_Optimization.git
 cd LLM_Inference_Optimization
 git checkout decode-engine
 
-bash cluster/setup_env.sh          # build deps + CUTLASS clone + build_ext --inplace
-hf auth login                      # only for gated meta-llama weights
-python cluster/check_env.py        # login-node sanity (GPU checks skipped)
+bash cluster/setup_env.sh                     # build deps + CUTLASS + build_ext --inplace
+hf auth login                                 # only for gated meta-llama weights
+/usr/bin/python3.9 cluster/check_env.py       # login-node sanity (GPU checks skipped)
 ```
 
 `nvcc` (CUDA 12.4, at `/cm/shared/apps/cuda12.4/...`) is already on `PATH` by
@@ -36,7 +46,7 @@ match `sinfo` output.
 
 ```bash
 git pull                                   # get the code I authored
-sbatch cluster/slurm/build.sbatch          # rebuild extension (or login-node: python setup.py build_ext --inplace)
+sbatch cluster/slurm/build.sbatch          # rebuild (login-node: /usr/bin/python3.9 setup.py build_ext --inplace)
 sbatch cluster/slurm/test.sbatch           # correctness gate: check_env + pytest on H100
 sbatch cluster/slurm/bench.sbatch          # isolated-kernel bandwidth benchmark
 RUN_E2E=1 sbatch --export=ALL cluster/slurm/bench.sbatch   # + end-to-end model decode
@@ -51,7 +61,7 @@ Interactive debugging session on a GPU node:
 ```bash
 srun --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=32G --time=01:00:00 --pty bash
 source cluster/env.sh
-python cluster/check_env.py --require-gpu
+"$PYTHON_BIN" cluster/check_env.py --require-gpu
 ```
 
 ## Troubleshooting: build
@@ -60,7 +70,10 @@ python cluster/check_env.py --require-gpu
 |---|---|
 | `error: invalid command 'bdist_wheel'` | `wheel` missing from user site: `pip install --user --upgrade setuptools wheel ninja pybind11` |
 | `pip install -e .` recurses into a nested `pip install -e . --use-pep517 ...` subprocess and fails | Known pip 21.2.3 + modern setuptools `develop` interaction. Use `python setup.py build_ext --inplace -v` instead — it builds `sparse_kv/_C*.so` directly with no install step, no pip involved. |
-| Need the real compiler error, not a wrapped subprocess trace | `python setup.py build_ext --inplace -v 2>&1 \| tee build.log` then `grep -i error build.log \| tail -40` |
+| Need the real compiler error, not a wrapped subprocess trace | `"$PYTHON_BIN" setup.py build_ext --inplace -v 2>&1 \| tee build.log` then `grep -i error build.log \| tail -40` |
+| `ImportError: .../_C.cpython-3XX-*.so: undefined symbol: _ZN3c10...` | Wrong interpreter, or a stale `.so` built by another one / against another torch. `rm -f sparse_kv/_C.*.so && rm -rf build`, then rebuild with `"$PYTHON_BIN"`. `check_env.py` now flags foreign builds before the import is attempted. |
+| Two `_C.cpython-*.so` files in `sparse_kv/` | Same cause. Only the one matching `PYTHON_BIN`'s `EXT_SUFFIX` is loadable; delete the rest. |
+| Package versions differ between runs (e.g. transformers 4.57 vs 4.44) | You are hitting two different interpreters' user-sites (`~/.local/lib/python3.9` vs `python3.12`). Use `PYTHON_BIN`. |
 
 ## Profiling without sudo
 

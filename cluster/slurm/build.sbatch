@@ -16,5 +16,7 @@ set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 source cluster/env.sh
 
-python setup.py build_ext --inplace -v
-python cluster/check_env.py --require-gpu
+rm -rf build
+rm -f sparse_kv/_C.*.so
+"$PYTHON_BIN" setup.py build_ext --inplace -v
+"$PYTHON_BIN" cluster/check_env.py --require-gpu

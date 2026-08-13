@@ -13,5 +13,5 @@ set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 source cluster/env.sh
 
-python cluster/check_env.py --require-gpu
-pytest tests/ -v
+"$PYTHON_BIN" cluster/check_env.py --require-gpu
+"$PYTHON_BIN" -m pytest tests/ -v

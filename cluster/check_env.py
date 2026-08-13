@@ -12,10 +12,12 @@ Exit code 0 = ready; 1 = at least one hard failure.
 NOTE: keep this file Python-3.9 compatible (no ``X | None`` annotations).
 """
 import argparse
+import glob
 import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 
 FAILURES = []
 
@@ -35,6 +37,9 @@ def main():
 
     print("== Python ==")
     report(sys.version_info >= (3, 9), "python >= 3.9", sys.version.split()[0])
+    # The extension is ABI-locked to one interpreter, and `python3` resolves
+    # differently on login vs compute nodes here — always name it explicitly.
+    report(True, "interpreter", sys.executable)
 
     print("== CUDA toolkit ==")
     nvcc = shutil.which("nvcc")
@@ -81,17 +86,27 @@ def main():
         report(False, "triton", str(exc))
 
     print("== CUDA extension (WS1/WS3/WS4) ==")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+    built = sorted(os.path.basename(p) for p in
+                   glob.glob(os.path.join(root, "sparse_kv", "_C.*.so")))
+    foreign = [b for b in built if not b.endswith(ext_suffix)]
+    if foreign:
+        report(False, "no foreign-interpreter builds",
+               "{} built by another python (this one loads *{}); "
+               "'rm -f sparse_kv/_C.*.so && rm -rf build' then rebuild".format(
+                   ", ".join(foreign), ext_suffix),
+               hard=False)
     try:
         from sparse_kv import _C
         syms = [s for s in dir(_C) if not s.startswith("_")]
         report(True, "sparse_kv._C importable", ", ".join(syms))
     except ImportError as exc:
         report(False, "sparse_kv._C importable",
-               "python {}.{} - python setup.py build_ext --inplace ({})".format(
-                   sys.version_info.major, sys.version_info.minor, exc))
+               "rebuild for THIS interpreter: {} setup.py build_ext --inplace"
+               "  ({})".format(sys.executable, exc))
 
     print("== CUTLASS headers (WS1/WS3) ==")
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     header = os.path.join(root, "third_party", "cutlass",
                           "include", "cutlass", "cutlass.h")
     report(os.path.isfile(header), "third_party/cutlass",

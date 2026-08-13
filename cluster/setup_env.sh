@@ -10,7 +10,12 @@ CUDA_MODULE="${CUDA_MODULE:-}"                 # confirmed module name: cuda12.4
                                                 # empty if nvcc is already on PATH
                                                 # (Bright Cluster Manager profile does
                                                 # this by default on this cluster)
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+# PINNED, do not use bare `python3`: on this cluster `python3` resolves to
+# ~/.localpython3.12 on compute nodes but /usr/bin/python3.9 on login nodes, and
+# `python` is /usr/bin/python. A CPython extension is ABI-locked to one
+# interpreter, so an ambiguous `python3` silently loads the wrong _C*.so.
+# 3.9 is the verified env (torch 2.8.0+cu128, triton 3.4.0, transformers 4.57.6).
+PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3.9}"
 CUTLASS_TAG="${CUTLASS_TAG:-v3.9.2}"
 # HF model cache belongs on scratch, not $HOME (quota).
 export HF_HOME="${HF_HOME:-${SCRATCH:-$HOME}/hf_cache}"
@@ -29,6 +34,8 @@ command -v nvcc >/dev/null || {
 nvcc --version | tail -1
 
 echo "== [2/5] Python build deps (user site) =="
+command -v "$PYTHON_BIN" >/dev/null || { echo "ERROR: PYTHON_BIN=$PYTHON_BIN not found."; exit 1; }
+echo "interpreter: $("$PYTHON_BIN" -c 'import sys; print(sys.executable, sys.version.split()[0])')"
 "$PYTHON_BIN" -m pip install --user --upgrade setuptools wheel ninja pybind11
 
 echo "== [3/5] PyTorch =="
@@ -54,11 +61,16 @@ fi
 
 echo "== [5/5] Build CUDA extension (sm_90a, in place) =="
 mkdir -p cluster/logs
+# Drop extensions built by any other interpreter — a stale _C.cpython-3XX.so
+# ahead of ours on the import path fails with 'undefined symbol: ...'.
+rm -rf build
+rm -f sparse_kv/_C.*.so
 "$PYTHON_BIN" setup.py build_ext --inplace -v
 
 echo
 echo "== Setup done. Next steps =="
 echo "  1. Gated Llama weights:   hf auth login    (or export HF_TOKEN=...)"
-echo "  2. Sanity check (login):  python cluster/check_env.py"
+echo "  2. Sanity check (login):  $PYTHON_BIN cluster/check_env.py"
 echo "  3. Full check (GPU node): sbatch cluster/slurm/test.sbatch"
+echo "  Always invoke this project with $PYTHON_BIN, never bare 'python3'."
 echo "  HF_HOME=$HF_HOME"

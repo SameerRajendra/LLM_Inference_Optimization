@@ -17,9 +17,9 @@ source cluster/env.sh
 
 export MODEL_ID="${MODEL_ID:-meta-llama/Llama-3.1-8B}"
 
-python cluster/check_env.py --require-gpu
-python benchmarks/profile_kernel_vs_sdpa.py
+"$PYTHON_BIN" cluster/check_env.py --require-gpu
+"$PYTHON_BIN" benchmarks/profile_kernel_vs_sdpa.py
 
 if [ "${RUN_E2E:-0}" = "1" ]; then
-    python benchmarks/llama_integration_benchmark.py
+    "$PYTHON_BIN" benchmarks/llama_integration_benchmark.py
 fi
