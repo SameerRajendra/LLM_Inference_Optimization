@@ -1,0 +1,61 @@
+{
+  "benchmark": "kernel_vs_sdpa",
+  "label": "stage0-baseline",
+  "RECONSTRUCTED": "Transcribed from console output of a run made before results recording existed. The numbers are verbatim; the git SHA is inferred as the commit checked out at the time (the kernel had no SMEM_STRIDE padding) and the UTC timestamp is approximate. Kept so the optimisation progression has a starting point. Every later row is captured live.",
+  "provenance": {
+    "utc": "2026-08-13T05:45:00Z",
+    "git_sha": "6779c18",
+    "git_branch": "decode-engine",
+    "git_subject": "Put the repo root on PYTHONPATH so 'import sparse_kv' resolves",
+    "git_dirty": null,
+    "git_available": false,
+    "host": "g012",
+    "python": "3.9.18",
+    "torch": "2.8.0+cu128",
+    "cuda": "12.8",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "sm": "sm_90",
+    "hbm_gb": 84.9
+  },
+  "rows": [
+    {
+      "ctx": 4096,
+      "batch": 1,
+      "ours_ms": 0.0757,
+      "sdpa_ms": 0.0201,
+      "ratio": 3.766,
+      "kv_gb": 0.016777,
+      "ours_gbps": 222.0,
+      "ours_pct_hbm": 6.6,
+      "max_err": 0.00006
+    },
+    {
+      "ctx": 16384,
+      "batch": 1,
+      "ours_ms": 0.4055,
+      "sdpa_ms": 0.0397,
+      "ratio": 10.214,
+      "kv_gb": 0.067109,
+      "ours_gbps": 165.0,
+      "ours_pct_hbm": 4.9,
+      "max_err": 0.00003
+    },
+    {
+      "ctx": 64000,
+      "batch": 1,
+      "ours_ms": 1.3538,
+      "sdpa_ms": 0.1015,
+      "ratio": 13.338,
+      "kv_gb": 0.262144,
+      "ours_gbps": 194.0,
+      "ours_pct_hbm": 5.8,
+      "max_err": 0.00002
+    }
+  ],
+  "extra": {
+    "hq": 32,
+    "hkv": 8,
+    "d": 128,
+    "hbm_tbs": 3.35
+  }
+}

@@ -64,6 +64,8 @@ def kernel_progression(runs, ctx):
         seen = True
         prov = r.get("provenance", {})
         dirty = " (dirty)" if prov.get("git_dirty") else ""
+        if r.get("RECONSTRUCTED"):
+            dirty += " *transcribed*"
         out.append("| {} | {} | {} | {}x | {} | {} | `{}`{} |".format(
             r.get("label", "?"),
             fmt(row.get("ours_ms")), fmt(row.get("sdpa_ms")),
@@ -141,6 +143,10 @@ def main():
             doc += kernel_progression(kernel, ctx)
         doc += ["", "Raw runs: " + ", ".join("`{}`".format(r["_path"])
                                              for r in kernel[-6:])]
+        if any(r.get("RECONSTRUCTED") for r in kernel):
+            doc += ["", "Rows marked *transcribed* were copied from console "
+                    "output of a run made before result recording existed - "
+                    "the numbers are verbatim but were not captured live."]
     else:
         doc += ["_No kernel benchmark results recorded yet._"]
 
