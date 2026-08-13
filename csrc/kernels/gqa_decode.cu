@@ -287,19 +287,20 @@ __global__ void gqa_combine_kernel(
 
 // Tokens per shared-memory tile.
 //
-// EXPERIMENT (stage 4a): 64 -> 32. After FP8 halved the traffic, the kernel
-// stopped being bandwidth-bound (%HBM fell 56% -> 31%) and ~86 us of the 64K
-// runtime became independent of bytes. That floor is only ~18% of fp32
-// CUDA-core peak for this op's ~1.05 GFLOP, so the ALUs are idle most of the
-// time -- which implicates latency hiding, not FLOP throughput.
+// 64 after a measured negative result. Stage 4a tried 32, which halves the K/V
+// shared footprint (35.3 -> 18.2 KB) and doubles residency (6 -> 12 blocks/SM,
+// 37.5% -> 75% occupancy). Everything got SLOWER: 64K fp16 0.1397 -> 0.1474 ms,
+// 4K fp16 0.0190 -> 0.0253, 64K fp8 0.1251 -> 0.1372. Twice the tiles means
+// twice the barriers and loop overhead, and that cost more than the extra warps
+// returned.
 //
-// Halving the tile halves the K/V shared footprint (35.3 KB -> 18.2 KB), which
-// takes residency from 6 to 12 blocks/SM, i.e. 37.5% -> 75% occupancy. The
-// trade is twice as many tiles, hence twice the barriers and loop overhead,
-// so this is genuinely uncertain and is being MEASURED, not assumed. If 64K
-// does not improve, the floor is instruction-throughput and the answer is
-// tensor cores instead.
-#define TILE_V4 32
+// The useful conclusion is what it rules OUT: this kernel is not occupancy
+// -limited, so the ~86 us byte-independent floor at 64K is instruction issue,
+// not latency hiding. At ~1700 instructions per lane per tile, 24 warps/SM and
+// 4 issue slots/cycle, the issue-rate estimate lands near the observed floor.
+// Reducing instruction COUNT is therefore the lever -- i.e. tensor-core MMA,
+// where one m16n8k16 does 2048 MACs against 32 for a warp of scalar FMAs.
+#define TILE_V4 64
 #define VEC_HALF 8                     // uint4 = 8 halfs
 
 // One query-head row against one K row. Q is read broadcast (same address for
