@@ -1,0 +1,10 @@
+/home/srajendr1/.local/lib/python3.9/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+     ctx     v3(ms)   SDPA(ms)   v3/SDPA   v3 GB/s    %HBM   max_err
+------------------------------------------------------------------------
+    4096     0.0704     0.0201     3.50x       238    7.1%   0.00006
+   16384     0.4060     0.0393    10.34x       165    4.9%   0.00003
+   64000     1.3752     0.1021    13.47x       191    5.7%   0.00002
+------------------------------------------------------------------------
+v3/SDPA < 1.0 = our kernel is faster;  %HBM = fraction of peak bandwidth used
+(single decode step, batch=1, isolated — no model, no eager overhead)
