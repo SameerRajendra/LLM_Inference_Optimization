@@ -37,21 +37,39 @@ head_dim 128), single decode step, batch 1, isolated kernel. Full auditable
 history in [`RESULTS.md`](RESULTS.md) — every row pinned to the commit that
 produced it.
 
-| Context | Start | **Now** | Speedup | % HBM peak | vs PyTorch SDPA (FlashAttention) |
+| Context | Start | fp16 KV | **FP8 KV** | Total speedup | vs PyTorch SDPA (FlashAttention) |
 |---:|---:|---:|---:|---:|---|
-| 4K | 0.0757 ms | **0.0190 ms** | 4.0× | 26.3% | **0.96× — faster** |
-| 16K | 0.4055 ms | **0.0552 ms** | 7.3× | 36.3% | 1.43× slower |
-| 64K | 1.3538 ms | **0.1397 ms** | **9.7×** | **56.0%** | 1.37× slower |
+| 4K | 0.0757 ms | 0.0190 ms | **0.0181 ms** | 4.2× | **0.90× — faster** |
+| 16K | 0.4055 ms | 0.0552 ms | **0.0441 ms** | 9.2× | 1.12× slower |
+| 64K | 1.3538 ms | 0.1397 ms | **0.1251 ms** | **10.8×** | 1.22× slower |
 
-Numerically unchanged throughout: max abs error vs SDPA is ≤ 0.002 across all
-32 layers at every context — **one fp16 ULP**, i.e. bit-exact up to the last
-representable digit. 13 correctness tests gate every performance change,
+The fp16 path is numerically unchanged throughout: max abs error vs SDPA is
+≤ 0.002 at every context — **one fp16 ULP**, i.e. exact to the last
+representable digit. 28 correctness tests gate every performance change,
 including partial-tile boundaries (N = 63/64/65) and batching.
 
 FlashAttention sits at ~77% of HBM peak — near the roofline for *exact* dense
-attention. **This project does not claim to beat it at that problem**, and the
-dense kernel's honest target is parity. Beating it requires moving fewer bytes,
-which is what the FP8 and sparsity work below is for.
+attention. **This project does not claim to beat it at that problem.** The
+dense kernel's honest target is parity; the wins come from moving fewer bytes.
+
+### FP8 KV cache — quality, measured end to end
+
+e4m3 with one scale per (64-token page, KV head) halves KV traffic *and*
+halves resident cache, taking an 80 GB H100 from ~7 to ~14 concurrent 64K
+sequences. Validated on **Qwen3-8B** over 512 teacher-forced steps of real
+text (not the model's own greedy output, which is near-deterministic by
+construction and cannot stress a quantiser):
+
+| Prefill | Perplexity Δ | Parity on confident steps | Raw argmax parity |
+|---:|---:|---:|---:|
+| 2K | **+0.24%** | **100.0%** | 98.0% |
+| 8K | **−0.07%** | **100.0%** | 97.9% |
+
+Raw parity is reported for honesty but is not the criterion: every
+disagreement occurred where the reference was ~18–26% confident with a
+≤0.03 margin over the runner-up — near-ties, indistinguishable from sampling
+noise. **No confident prediction ever changed**, at either context length.
+Reproduce with `benchmarks/quality_gate_fp8.py`.
 
 ## How it got there
 
@@ -63,7 +81,9 @@ one that didn't work.
 | 0 | Split-KV baseline (FlashDecoding-style) | 1.3538 ms | 5.8% of peak |
 | 1 | Remove a 32-way shared-memory bank conflict | 1.3752 ms | **no effect** |
 | 2 | Block per KV head + warp per query head | 0.1697 ms | **8.0×** |
-| 3a | Size split count to whole waves | **0.1397 ms** | 1.21× |
+| 3a | Size split count to whole waves | 0.1397 ms | 1.21× |
+| WS3 | FP8 (e4m3) KV cache, per-page scales | **0.1251 ms** | 1.12×, 2× fewer bytes |
+| 4a | Halve tile to double occupancy | 0.1372 ms | **reverted — slower** |
 
 **Stage 1 was a dud, and it's the most instructive step.** `tile_K` had a
 128-half row stride, so the dot-product read `tile_K[tid][d]` mapped to bank
@@ -94,6 +114,16 @@ split against a 792-block residency (132 SMs × 6); at 64K it launched 1000
 blocks — one full wave plus a wave 26% occupied. Choosing the split count from
 measured residency, rounded to whole waves, took utilisation to 100%. It
 predicted 16K would gain most (33% → 100%), and 16K gained most.
+
+**Stage 4a was the second negative result, and it located the current limit.**
+After FP8 halved the bytes, `%HBM` *fell* from 56% to 31% — the kernel had
+stopped being bandwidth-bound, and ~86 µs of the 64K runtime no longer depended
+on bytes at all. Halving the tile to double occupancy (37.5% → 75%) made
+everything slower, which rules occupancy out too. What remains is instruction
+issue: ~1700 instructions per lane per tile against 4 issue slots/cycle and 24
+warps/SM lands near the observed floor. That is a *count* problem, so the next
+step is doing more work per instruction — tensor-core MMA, where one
+`m16n8k16` performs 2048 MACs against 32 for a warp of scalar FMAs.
 
 ## Skills demonstrated
 
@@ -149,20 +179,20 @@ On a Slurm cluster see [`cluster/CLUSTER.md`](cluster/CLUSTER.md).
 
 ## Roadmap
 
-The dense kernel is now within 1.37× of FlashAttention. Further tuning chases a
-roofline someone else already reached; the remaining wins come from **moving
-fewer bytes**:
-
-- [ ] **FP8 (e4m3) KV cache** with per-page scales and dequantisation fused into
-      the decode kernel. Halves KV traffic *and* doubles the sequences that fit
-      per GPU. At the current 56% efficiency this projects to ~0.070 ms at 64K —
-      **~1.45× faster than FlashAttention** — gated on argmax parity and
-      perplexity delta.
+- [x] **FP8 (e4m3) KV cache** with per-page scales, dequantised in-register on
+      load — 2× fewer KV bytes at +0.24% perplexity, validated to 8K context.
+- [ ] **Tensor-core MMA for QK^T and PV.** The measured bottleneck is now
+      instruction issue, not bandwidth or occupancy (both ruled out by
+      experiment above). This is the fix that addresses it, and unlike the
+      byte-reduction work it needs no quality trade-off: HMMA multiplies in
+      fp16 and accumulates in fp32, so numerics are unchanged.
 - [ ] **Paged KV + Quest-style query-aware sparsity** — per-page criticality
       metadata, load only the top-k pages. Converts the existing sparse
       *ablations* (which read all of K before selecting, so save nothing) into a
-      real bandwidth reduction.
-- [ ] **`cp.async` double-buffered pipeline** to close the remaining dense gap.
+      real bandwidth reduction. Composes with FP8: 8× fewer bytes together.
+- [ ] **Measured serving comparison against vLLM** (`--kv-cache-dtype fp8`) at
+      matched context, replacing the modelled tokens/sec projections in
+      `bench_serving_regime.py` with numbers from a production engine.
 - [ ] **Triton port** of the decode kernel for a cross-language comparison.
 
 ## References
