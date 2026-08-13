@@ -70,7 +70,8 @@ source cluster/env.sh
 | Symptom | Fix |
 |---|---|
 | `error: invalid command 'bdist_wheel'` | `wheel` missing from user site: `pip install --user --upgrade setuptools wheel ninja pybind11` |
-| `pip install -e .` recurses into a nested `pip install -e . --use-pep517 ...` subprocess and fails | Known pip 21.2.3 + modern setuptools `develop` interaction. Use `python setup.py build_ext --inplace -v` instead — it builds `sparse_kv/_C*.so` directly with no install step, no pip involved. |
+| `pip install -e .` recurses into a nested `pip install -e . --use-pep517 ...` subprocess and fails | Known pip 21.2.3 + modern setuptools `develop` interaction. Use `python setup.py build_ext --inplace -v` instead — it builds `sparse_kv/_C*.so` directly with no install step, no pip involved. **Never `pip install -e .` on this cluster**, in any form, including `--no-deps`. |
+| pip keeps downgrading `transformers`/`accelerate` on unrelated installs | A previously-registered `sparse-kv` dist-info advertises old pins. The package does not need to be installed at all — `build_ext --inplace` plus `PYTHONPATH` (set by `cluster/env.sh`) is the whole mechanism. Run `"$PYTHON_BIN" -m pip uninstall -y sparse-kv` and the pins stop being considered. |
 | Need the real compiler error, not a wrapped subprocess trace | `"$PYTHON_BIN" setup.py build_ext --inplace -v 2>&1 \| tee build.log` then `grep -i error build.log \| tail -40` |
 | `ImportError: .../_C.cpython-3XX-*.so: undefined symbol: _ZN3c10...` | Wrong interpreter, or a stale `.so` built by another one / against another torch. `rm -f sparse_kv/_C.*.so && rm -rf build`, then rebuild with `"$PYTHON_BIN"`. `check_env.py` now flags foreign builds before the import is attempted. |
 | Two `_C.cpython-*.so` files in `sparse_kv/` | Same cause. Only the one matching `PYTHON_BIN`'s `EXT_SUFFIX` is loadable; delete the rest. |
