@@ -285,7 +285,21 @@ __global__ void gqa_combine_kernel(
 // half2 because a 260 B row stride is 4-byte but not 16-byte aligned, and the
 // global side is the expensive one.
 
-#define TILE_V4 64
+// Tokens per shared-memory tile.
+//
+// EXPERIMENT (stage 4a): 64 -> 32. After FP8 halved the traffic, the kernel
+// stopped being bandwidth-bound (%HBM fell 56% -> 31%) and ~86 us of the 64K
+// runtime became independent of bytes. That floor is only ~18% of fp32
+// CUDA-core peak for this op's ~1.05 GFLOP, so the ALUs are idle most of the
+// time -- which implicates latency hiding, not FLOP throughput.
+//
+// Halving the tile halves the K/V shared footprint (35.3 KB -> 18.2 KB), which
+// takes residency from 6 to 12 blocks/SM, i.e. 37.5% -> 75% occupancy. The
+// trade is twice as many tiles, hence twice the barriers and loop overhead,
+// so this is genuinely uncertain and is being MEASURED, not assumed. If 64K
+// does not improve, the floor is instruction-throughput and the answer is
+// tensor cores instead.
+#define TILE_V4 32
 #define VEC_HALF 8                     // uint4 = 8 halfs
 
 // One query-head row against one K row. Q is read broadcast (same address for
@@ -536,11 +550,13 @@ torch::Tensor launch_fused_gqa(
 // byte-identical to v4, which is deliberate: it keeps the A/B honest, since any
 // timing difference can only come from the traffic.
 //
-// One scale per tile, not per token: the launcher forces split_len to a
-// multiple of KV_PAGE_TOKENS so a tile is exactly one quantisation page.
-static_assert(TILE_V4 == KV_PAGE_TOKENS,
-              "decode tile must equal the quantisation page, or the scale "
-              "lookup below reads the wrong page");
+// One scale per tile, not per token. The launcher forces split_len to a
+// multiple of KV_PAGE_TOKENS, so as long as the tile divides the page evenly
+// every tile lies wholly inside one page and page = tile_start/KV_PAGE_TOKENS
+// is exact. (Tiles LARGER than a page would straddle two scales.)
+static_assert(KV_PAGE_TOKENS % TILE_V4 == 0,
+              "decode tile must divide the quantisation page evenly, or a tile "
+              "straddles two pages and the scale lookup below is wrong");
 
 __global__ void gqa_decode_v4_fp8_kernel(
     const __half*             __restrict__ Q,         // [B, Hq, D]
