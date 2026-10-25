@@ -1,0 +1,602 @@
+Note that running a local entrypoint in detached mode only keeps the last triggered Modal function alive after the parent process has been killed or disconnected.
+✓ Initialized. View run at https://modal.com/apps/sameerrajendra126/main/ap-Ut7g2omSoElpsMiOIlFx5e
+✓ Created objects.
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA programming/LLM_Inference_Optimization/pyproject.toml
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA programming/LLM_Inference_Optimization/setup.py
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA programming/LLM_Inference_Optimization/.git/HEAD
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA 
+│   programming/LLM_Inference_Optimization/modal_apps/bench_triton_h100.py
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA programming/LLM_Inference_Optimization/triton_kernels
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA programming/LLM_Inference_Optimization/sparse_kv
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA programming/LLM_Inference_Optimization/tests
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA programming/LLM_Inference_Optimization/csrc
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA programming/LLM_Inference_Optimization/benchmarks
+├── ✓ Uploaded /mnt/d/Stevens Institute of Technology/CUDA programming/LLM_Inference_Optimization/.git/refs
+└── ✓ Created Function bench.
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.8.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+Sat Oct 24 07:42:47 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.57.04              KMD Version: 610.57.04     CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:90:00.0 Off |                    0 |
+| N/A   30C    P0             70W /  700W |       4MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+/usr/local/lib/python3.11/site-packages/wheel/bdist_wheel.py:4: FutureWarning: The 'wheel' package is no longer the canonical location of the 'bdist_wheel' command, and will be removed in a future release. Please update to setuptools v70.1 or later which contains an integrated version of this command.
+  warn(
+running build_ext
+W1024 07:42:50.233000 24 site-packages/torch/utils/cpp_extension.py:517] There are no g++ version bounds defined for CUDA version 12.8
+building 'sparse_kv._C' extension
+creating /app/build
+creating /app/build/temp.linux-x86_64-cpython-311
+creating /app/build/temp.linux-x86_64-cpython-311/csrc
+creating /app/build/temp.linux-x86_64-cpython-311/csrc/kernels
+creating /app/build/temp.linux-x86_64-cpython-311/csrc/pybind
+[1/5] g++ -MMD -MF /app/build/temp.linux-x86_64-cpython-311/csrc/pybind/bindings.o.d -Wsign-compare -Wunreachable-code -DNDEBUG -g -fwrapv -O3 -Wall -fPIC -I/tools/deps/include -I/tools/deps/include/ncursesw -I/tools/deps/libedit/include -g0 -fPIC -Icsrc/kernels -Icsrc/pybind -I/usr/local/lib/python3.11/site-packages/torch/include -I/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda/include -I/usr/local/include/python3.11 -c -c /app/csrc/pybind/bindings.cpp -o /app/build/temp.linux-x86_64-cpython-311/csrc/pybind/bindings.o -O3 -std=c++20 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1018"' -DTORCH_EXTENSION_NAME=_C
+[2/5] /usr/local/cuda/bin/nvcc --generate-dependencies-with-compile --dependency-output /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/sparse_attention.o.d -Icsrc/kernels -Icsrc/pybind -I/usr/local/lib/python3.11/site-packages/torch/include -I/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda/include -I/usr/local/include/python3.11 -c -c /app/csrc/kernels/sparse_attention.cu -o /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/sparse_attention.o -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' -O3 -arch=sm_90a --use_fast_math -lineinfo -DUSE_HOPPER=1 --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler -fPIC -std=c++20 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1018"' -DTORCH_EXTENSION_NAME=_C -ccbin gcc
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+[3/5] /usr/local/cuda/bin/nvcc --generate-dependencies-with-compile --dependency-output /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/kv_evict_quant.o.d -Icsrc/kernels -Icsrc/pybind -I/usr/local/lib/python3.11/site-packages/torch/include -I/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda/include -I/usr/local/include/python3.11 -c -c /app/csrc/kernels/kv_evict_quant.cu -o /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/kv_evict_quant.o -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' -O3 -arch=sm_90a --use_fast_math -lineinfo -DUSE_HOPPER=1 --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler -fPIC -std=c++20 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1018"' -DTORCH_EXTENSION_NAME=_C -ccbin gcc
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+[4/5] /usr/local/cuda/bin/nvcc --generate-dependencies-with-compile --dependency-output /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/kv_fp8.o.d -Icsrc/kernels -Icsrc/pybind -I/usr/local/lib/python3.11/site-packages/torch/include -I/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda/include -I/usr/local/include/python3.11 -c -c /app/csrc/kernels/kv_fp8.cu -o /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/kv_fp8.o -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' -O3 -arch=sm_90a --use_fast_math -lineinfo -DUSE_HOPPER=1 --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler -fPIC -std=c++20 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1018"' -DTORCH_EXTENSION_NAME=_C -ccbin gcc
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+[5/5] /usr/local/cuda/bin/nvcc --generate-dependencies-with-compile --dependency-output /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/gqa_decode.o.d -Icsrc/kernels -Icsrc/pybind -I/usr/local/lib/python3.11/site-packages/torch/include -I/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda/include -I/usr/local/include/python3.11 -c -c /app/csrc/kernels/gqa_decode.cu -o /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/gqa_decode.o -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' -O3 -arch=sm_90a --use_fast_math -lineinfo -DUSE_HOPPER=1 --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler -fPIC -std=c++20 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1018"' -DTORCH_EXTENSION_NAME=_C -ccbin gcc
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/nn/modules/container/any_module_holder.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+            module->_forward_populate_default_args(std::move(arguments)));
+            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(92): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+    module.attr(name) = wrapper_class;
+    ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(154): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(158): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                module.to(detail::py_object_to_dtype(object), non_blocking);
+                ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(169): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_dtype(dtype), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(171): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(detail::py_object_to_device(device), non_blocking);
+                  ^
+
+/usr/local/lib/python3.11/site-packages/torch/include/torch/csrc/api/include/torch/python.h(173): warning #3189-D: "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+                  module.to(
+                  ^
+
+creating build/lib.linux-x86_64-cpython-311
+creating build/lib.linux-x86_64-cpython-311/sparse_kv
+g++ -pthread -shared -g0 /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/gqa_decode.o /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/kv_evict_quant.o /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/kv_fp8.o /app/build/temp.linux-x86_64-cpython-311/csrc/kernels/sparse_attention.o /app/build/temp.linux-x86_64-cpython-311/csrc/pybind/bindings.o -L/usr/local/lib/python3.11/site-packages/torch/lib -L/usr/local/cuda/lib64 -L/install/lib -lc10 -ltorch -ltorch_cpu -ltorch_python -lcudart -lc10_cuda -ltorch_cuda -o build/lib.linux-x86_64-cpython-311/sparse_kv/_C.cpython-311-x86_64-linux-gnu.so
+copying build/lib.linux-x86_64-cpython-311/sparse_kv/_C.cpython-311-x86_64-linux-gnu.so -> sparse_kv
+...............................................................          [100%]
+63 passed in 68.10s (0:01:08)
+B=1 N=  4096 sdpa         0.0266 ms     631 GB/s  18.8%
+B=1 N=  4096 cuda_v4      0.0287 ms     586 GB/s  17.5%
+B=1 N=  4096 cuda_v4_fp8  0.0252 ms     334 GB/s  10.0%
+B=1 N=  4096 triton_fp16  0.0185 ms     906 GB/s  27.0%
+B=1 N=  4096 triton_fp8   0.0160 ms     526 GB/s  15.7%
+B=1 N=  8192 sdpa         0.0348 ms     965 GB/s  28.8%
+B=1 N=  8192 cuda_v4      0.0462 ms     727 GB/s  21.7%
+B=1 N=  8192 cuda_v4_fp8  0.0347 ms     484 GB/s  14.5%
+B=1 N=  8192 triton_fp16  0.0265 ms    1265 GB/s  37.7%
+B=1 N=  8192 triton_fp8   0.0213 ms     788 GB/s  23.5%
+B=1 N= 16384 sdpa         0.0485 ms    1385 GB/s  41.3%
+B=1 N= 16384 cuda_v4      0.0635 ms    1058 GB/s  31.6%
+B=1 N= 16384 cuda_v4_fp8  0.0504 ms     666 GB/s  19.9%
+B=1 N= 16384 triton_fp16  0.0407 ms    1649 GB/s  49.2%
+B=1 N= 16384 triton_fp8   0.0302 ms    1114 GB/s  33.2%
+B=1 N= 32768 sdpa         0.0726 ms    1848 GB/s  55.1%
+B=1 N= 32768 cuda_v4      0.0953 ms    1409 GB/s  42.0%
+B=1 N= 32768 cuda_v4_fp8  0.0810 ms     829 GB/s  24.7%
+B=1 N= 32768 triton_fp16  0.0644 ms    2085 GB/s  62.2%
+B=1 N= 32768 triton_fp8   0.0483 ms    1392 GB/s  41.5%
+B=1 N= 65536 sdpa         0.1148 ms    2338 GB/s  69.7%
+B=1 N= 65536 cuda_v4      0.1513 ms    1775 GB/s  52.9%
+B=1 N= 65536 cuda_v4_fp8  0.1316 ms    1020 GB/s  30.4%
+B=1 N= 65536 triton_fp16  0.1068 ms    2514 GB/s  75.0%
+B=1 N= 65536 triton_fp8   0.0754 ms    1781 GB/s  53.1%
+B=4 N=  4096 sdpa         0.0446 ms    1507 GB/s  45.0%
+B=4 N=  4096 cuda_v4      0.0570 ms    1179 GB/s  35.2%
+B=4 N=  4096 cuda_v4_fp8  0.0452 ms     744 GB/s  22.2%
+B=4 N=  4096 triton_fp16  0.0404 ms    1664 GB/s  49.6%
+B=4 N=  4096 triton_fp8   0.0306 ms    1099 GB/s  32.8%
+B=4 N=  8192 sdpa         0.0678 ms    1982 GB/s  59.1%
+B=4 N=  8192 cuda_v4      0.0859 ms    1563 GB/s  46.6%
+B=4 N=  8192 cuda_v4_fp8  0.0736 ms     913 GB/s  27.2%
+B=4 N=  8192 triton_fp16  0.0632 ms    2125 GB/s  63.4%
+B=4 N=  8192 triton_fp8   0.0470 ms    1429 GB/s  42.6%
+B=4 N= 16384 sdpa         0.1122 ms    2392 GB/s  71.4%
+B=4 N= 16384 cuda_v4      0.1465 ms    1833 GB/s  54.7%
+B=4 N= 16384 cuda_v4_fp8  0.1256 ms    1070 GB/s  31.9%
+B=4 N= 16384 triton_fp16  0.1081 ms    2483 GB/s  74.1%
+B=4 N= 16384 triton_fp8   0.0758 ms    1773 GB/s  52.9%
+B=4 N= 32768 sdpa         0.1957 ms    2743 GB/s  81.8%
+B=4 N= 32768 cuda_v4      0.2733 ms    1964 GB/s  58.6%
+B=4 N= 32768 cuda_v4_fp8  0.2270 ms    1184 GB/s  35.3%
+B=4 N= 32768 triton_fp16  0.1905 ms    2818 GB/s  84.1%
+B=4 N= 32768 triton_fp8   0.1338 ms    2008 GB/s  59.9%
+B=4 N= 65536 sdpa         0.3640 ms    2950 GB/s  88.0%
+B=4 N= 65536 cuda_v4      0.4990 ms    2152 GB/s  64.2%
+B=4 N= 65536 cuda_v4_fp8  0.4197 ms    1280 GB/s  38.2%
+B=4 N= 65536 triton_fp16  0.3593 ms    2989 GB/s  89.2%
+B=4 N= 65536 triton_fp8   0.2477 ms    2169 GB/s  64.7%
+
+# Decode attention: Triton vs CUDA v4 vs SDPA
+
+GPU `NVIDIA H100 80GB HBM3` | commit `e797ecd` (decode-engine) | torch 2.8.0+cu128 | triton 3.4.0 | CUDA 12.8 | 2026-10-24T07:44:58Z
+
+Hq=32 Hkv=8 D=128. Median of 100 calls, cold L2. % of peak uses 3352 GB/s. Max err is vs fp16 SDPA (fp8 rows include quantisation error).
+
+## Batch 1
+
+| ctx | kernel | ms | GB/s | % peak | max err |
+|---:|---|---:|---:|---:|---:|
+| 4096 | sdpa | 0.0266 | 631 | 18.8 | 0.00000 |
+| 4096 | cuda_v4 | 0.0287 | 586 | 17.5 | 0.00006 |
+| 4096 | cuda_v4_fp8 | 0.0252 | 334 | 10.0 | 0.00449 |
+| 4096 | triton_fp16 | 0.0185 | 906 | 27.0 | 0.00006 |
+| 4096 | triton_fp8 | 0.0160 | 526 | 15.7 | 0.00446 |
+| 8192 | sdpa | 0.0348 | 965 | 28.8 | 0.00000 |
+| 8192 | cuda_v4 | 0.0462 | 727 | 21.7 | 0.00003 |
+| 8192 | cuda_v4_fp8 | 0.0347 | 484 | 14.5 | 0.00253 |
+| 8192 | triton_fp16 | 0.0265 | 1265 | 37.7 | 0.00006 |
+| 8192 | triton_fp8 | 0.0213 | 788 | 23.5 | 0.00254 |
+| 16384 | sdpa | 0.0485 | 1385 | 41.3 | 0.00000 |
+| 16384 | cuda_v4 | 0.0635 | 1058 | 31.6 | 0.00002 |
+| 16384 | cuda_v4_fp8 | 0.0504 | 666 | 19.9 | 0.00202 |
+| 16384 | triton_fp16 | 0.0407 | 1649 | 49.2 | 0.00003 |
+| 16384 | triton_fp8 | 0.0302 | 1114 | 33.2 | 0.00201 |
+| 32768 | sdpa | 0.0726 | 1848 | 55.1 | 0.00000 |
+| 32768 | cuda_v4 | 0.0953 | 1409 | 42.0 | 0.00002 |
+| 32768 | cuda_v4_fp8 | 0.0810 | 829 | 24.7 | 0.00138 |
+| 32768 | triton_fp16 | 0.0644 | 2085 | 62.2 | 0.00002 |
+| 32768 | triton_fp8 | 0.0483 | 1392 | 41.5 | 0.00138 |
+| 65536 | sdpa | 0.1148 | 2338 | 69.7 | 0.00000 |
+| 65536 | cuda_v4 | 0.1513 | 1775 | 52.9 | 0.00002 |
+| 65536 | cuda_v4_fp8 | 0.1316 | 1020 | 30.4 | 0.00086 |
+| 65536 | triton_fp16 | 0.1068 | 2514 | 75.0 | 0.00002 |
+| 65536 | triton_fp8 | 0.0754 | 1781 | 53.1 | 0.00086 |
+
+## Batch 4
+
+| ctx | kernel | ms | GB/s | % peak | max err |
+|---:|---|---:|---:|---:|---:|
+| 4096 | sdpa | 0.0446 | 1507 | 45.0 | 0.00000 |
+| 4096 | cuda_v4 | 0.0570 | 1179 | 35.2 | 0.00006 |
+| 4096 | cuda_v4_fp8 | 0.0452 | 744 | 22.2 | 0.00480 |
+| 4096 | triton_fp16 | 0.0404 | 1664 | 49.6 | 0.00006 |
+| 4096 | triton_fp8 | 0.0306 | 1099 | 32.8 | 0.00477 |
+| 8192 | sdpa | 0.0678 | 1982 | 59.1 | 0.00000 |
+| 8192 | cuda_v4 | 0.0859 | 1563 | 46.6 | 0.00003 |
+| 8192 | cuda_v4_fp8 | 0.0736 | 913 | 27.2 | 0.00290 |
+| 8192 | triton_fp16 | 0.0632 | 2125 | 63.4 | 0.00003 |
+| 8192 | triton_fp8 | 0.0470 | 1429 | 42.6 | 0.00291 |
+| 16384 | sdpa | 0.1122 | 2392 | 71.4 | 0.00000 |
+| 16384 | cuda_v4 | 0.1465 | 1833 | 54.7 | 0.00003 |
+| 16384 | cuda_v4_fp8 | 0.1256 | 1070 | 31.9 | 0.00208 |
+| 16384 | triton_fp16 | 0.1081 | 2483 | 74.1 | 0.00003 |
+| 16384 | triton_fp8 | 0.0758 | 1773 | 52.9 | 0.00206 |
+| 32768 | sdpa | 0.1957 | 2743 | 81.8 | 0.00000 |
+| 32768 | cuda_v4 | 0.2733 | 1964 | 58.6 | 0.00002 |
+| 32768 | cuda_v4_fp8 | 0.2270 | 1184 | 35.3 | 0.00189 |
+| 32768 | triton_fp16 | 0.1905 | 2818 | 84.1 | 0.00003 |
+| 32768 | triton_fp8 | 0.1338 | 2008 | 59.9 | 0.00190 |
+| 65536 | sdpa | 0.3640 | 2950 | 88.0 | 0.00000 |
+| 65536 | cuda_v4 | 0.4990 | 2152 | 64.2 | 0.00002 |
+| 65536 | cuda_v4_fp8 | 0.4197 | 1280 | 38.2 | 0.00124 |
+| 65536 | triton_fp16 | 0.3593 | 2989 | 89.2 | 0.00002 |
+| 65536 | triton_fp8 | 0.2477 | 2169 | 64.7 | 0.00124 |
+
+saved -> /app/results/triton/nvidia-h100-80gb-hbm3
+batch,ctx,kernel,ms,gbps,pct_peak,max_err,gpu,git_sha,torch,triton
+1,4096,sdpa,0.026623999699950218,630.7692378779361,18.81769802738473,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,4096,cuda_v4,0.028672000393271446,585.7142776805001,17.473576303117543,6.103515625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,4096,cuda_v4_fp8,0.02518399991095066,333.9059732264178,9.961395382649696,0.00449371337890625,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,4096,triton_fp16,0.01852799952030182,906.3903516188366,27.040284952829253,6.103515625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,4096,triton_fp8,0.01600000075995922,525.5679750368607,15.679235532125917,0.00446319580078125,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,8192,sdpa,0.03478400036692619,965.1223449250037,28.79243272449295,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,8192,cuda_v4,0.0461760014295578,727.0186885110179,21.689101685889554,3.0517578125e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,8192,cuda_v4_fp8,0.03468799963593483,484.3690087736937,14.450149426422843,0.0025281906127929688,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,8192,triton_fp16,0.026544000022113323,1264.7233262519878,37.73040949439105,6.103515625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,8192,triton_fp8,0.02131200022995472,788.3723638658996,23.51946192917362,0.0025377273559570312,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,16384,sdpa,0.04848000034689903,1384.5966897624742,41.30658382346284,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,16384,cuda_v4,0.06345599889755249,1057.8235181258651,31.557980851010296,1.52587890625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,16384,cuda_v4_fp8,0.0504320003092289,665.9898436321521,19.86843208926468,0.0020160675048828125,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,16384,triton_fp16,0.04070400074124336,1649.106888207804,49.197699528872434,3.0517578125e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,16384,triton_fp8,0.030160000547766685,1113.633932028794,33.22296933260125,0.0020093917846679688,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,32768,sdpa,0.07264000177383423,1847.9365187509213,55.12937108445469,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,32768,cuda_v4,0.0952640026807785,1409.0748679730264,42.03683973666546,1.52587890625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,32768,cuda_v4_fp8,0.08097599819302559,829.3570625694895,24.742155804579042,0.00138092041015625,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,32768,triton_fp16,0.06436799839138985,2085.416905211018,62.21410815068669,1.52587890625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,32768,triton_fp8,0.04825599864125252,1391.7029569581582,41.518584634789924,0.001384735107421875,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,65536,sdpa,0.11483200266957283,2337.778961954236,69.742809127513,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,65536,cuda_v4,0.1512800008058548,1774.5362147671965,52.939624545560754,1.52587890625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,65536,cuda_v4_fp8,0.1316159963607788,1020.390011194877,30.441229450921153,0.0008556842803955078,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,65536,triton_fp16,0.10680000111460686,2513.5939812577803,74.98788726902686,1.52587890625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+1,65536,triton_fp8,0.07540800049901009,1780.9734658295708,53.13166664169364,0.0008623600006103516,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,4096,sdpa,0.044576000422239304,1506.9633740959448,44.95714123197926,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,4096,cuda_v4,0.05696000158786774,1179.3258098206916,35.182750889638776,6.103515625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,4096,cuda_v4_fp8,0.045184001326560974,744.430573045048,22.2085493151864,0.00479888916015625,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,4096,triton_fp16,0.04036800004541874,1664.0507313818102,49.64351823931415,6.103515625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,4096,triton_fp8,0.030608000233769417,1098.9398766042034,32.78460252399175,0.00476837158203125,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,8192,sdpa,0.06776000186800957,1981.7482334426702,59.12136734614172,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,8192,cuda_v4,0.08591999858617783,1562.8871765554532,46.62551242707199,3.0517578125e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,8192,cuda_v4_fp8,0.07360000163316727,913.1408493028295,27.241672115239542,0.002899169921875,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,8192,triton_fp16,0.0631839968264103,2125.273340477741,63.403142615684395,3.0517578125e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,8192,triton_fp8,0.047040000557899475,1428.7237925789912,42.6230248382754,0.0029144287109375,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,16384,sdpa,0.11223999783396721,2392.2041801638698,71.36647315524671,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,16384,cuda_v4,0.1464959979057312,1832.8213455549678,54.678441096508585,3.0517578125e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,16384,cuda_v4_fp8,0.12558399885892868,1069.7923399534125,31.91504594133092,0.0020751953125,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,16384,triton_fp16,0.10812799632549286,2483.1773557677284,74.08047004080335,3.0517578125e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,16384,triton_fp8,0.07579200342297554,1772.598611099302,52.88182014019397,0.0020599365234375,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,32768,sdpa,0.19574400037527084,2743.0544331913707,81.83336614532729,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,32768,cuda_v4,0.2733280062675476,1964.4399245147927,58.6050096812289,1.52587890625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,32768,cuda_v4_fp8,0.22697600722312927,1183.5262558650995,35.30806252580846,0.0018939971923828125,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,32768,triton_fp16,0.19051200151443481,2818.3864729347097,84.0807420326584,3.0517578125e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,32768,triton_fp8,0.13380800187587738,2007.5934191827166,59.89240510688296,0.001895904541015625,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,65536,sdpa,0.36403200030326843,2949.760897683255,88.0000267805267,0.0,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,65536,cuda_v4,0.49902400374412537,2151.8150468581366,64.19495963180599,1.52587890625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,65536,cuda_v4_fp8,0.41967999935150146,1280.0195216119205,38.18673990489023,0.0012359619140625,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,65536,triton_fp16,0.3592959940433502,2988.6427285644654,89.15998593569408,1.52587890625e-05,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+4,65536,triton_fp8,0.24769599735736847,2168.781884775254,64.70113021405889,0.0012359619140625,NVIDIA H100 80GB HBM3,e797ecd,2.8.0+cu128,3.4.0
+
+✓ App completed. View run at https://modal.com/apps/sameerrajendra126/main/ap-Ut7g2omSoElpsMiOIlFx5e

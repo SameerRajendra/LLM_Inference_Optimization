@@ -71,6 +71,25 @@ disagreement occurred where the reference was ~18–26% confident with a
 noise. **No confident prediction ever changed**, at either context length.
 Reproduce with `benchmarks/quality_gate_fp8.py`.
 
+### Triton rewrite of the decode kernel
+
+`triton_kernels/gqa_decode.py` (169 lines, vs 931 for the CUDA kernels) is a split-KV GQA decode kernel that
+packs the query heads sharing a KV head into the M dimension of `tl.dot`, so QK and PV run on tensor cores
+instead of the scalar FMA chains that left CUDA v4 instruction-issue bound. Online softmax runs in base 2 and
+splits are merged with an exact LSE combine. FP8 (e4m3) KV uses per-(64-token page, KV head) scales, applied
+after the dot products. The same source runs on Ada and Hopper.
+
+| GPU | Triton vs CUDA v4, fp16 KV | Triton vs CUDA v4, FP8 KV | Notes |
+|---|---|---|---|
+| H100 80GB HBM3 | 1.35–1.74× | 1.48–1.75× | 89% of HBM bandwidth vs 64%; matches or beats SDPA |
+| RTX 4060 Laptop | 1.06–1.14× | 1.16–1.39× | CUDA v4 is not issue-bound at 256 GB/s, so less headroom |
+
+Nsight Compute on the laptop shows about 4× fewer issued instructions, with the work moved to the tensor
+pipe. FP8 on H100 is now limited by FP8-to-fp16 conversion; FP8 MMA is the next lever. Method: cold L2,
+launch overhead hidden with `torch.cuda._sleep`, median of 100 calls. Results and the exact per-shape tables
+are in `results/triton/<gpu>/decode.md`; tests in `tests/test_triton_decode.py` (63 cases); benchmark
+`benchmarks/bench_triton_decode.py`; H100 run `modal_apps/bench_triton_h100.py`.
+
 ## How it got there
 
 The optimisation is staged so each change has its own measured delta — including
@@ -143,6 +162,8 @@ LLM_Inference_Optimization/
 │   ├── sparse_attention.cu     # block-sparse decode (ablation)
 │   └── kv_evict_quant.cu       # top-k sparse / eviction (ablation)
 ├── sparse_kv/                  # Python package wrapping sparse_kv._C
+├── triton_kernels/             # Triton split-KV GQA decode (fp16 and FP8 KV)
+├── modal_apps/                 # H100 benchmark run on Modal
 ├── benchmarks/
 │   ├── profile_kernel_vs_sdpa.py   # staged kernel benchmark vs FlashAttention
 │   ├── bench_serving_regime.py     # batch × context sweep, KV capacity, tokens/s
@@ -193,7 +214,7 @@ On a Slurm cluster see [`cluster/CLUSTER.md`](cluster/CLUSTER.md).
 - [ ] **Measured serving comparison against vLLM** (`--kv-cache-dtype fp8`) at
       matched context, replacing the modelled tokens/sec projections in
       `bench_serving_regime.py` with numbers from a production engine.
-- [ ] **Triton port** of the decode kernel for a cross-language comparison.
+- [x] **Triton port** of the decode kernel: done, see "Triton rewrite of the decode kernel" above.
 
 ## References
 

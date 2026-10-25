@@ -3,22 +3,26 @@ from setuptools import setup
 
 ext_modules = []
 
+# Target GPU architecture; default Hopper. For an Ada laptop: CUDA_ARCH=sm_89
+CUDA_ARCH = os.environ.get("CUDA_ARCH", "sm_90a")
+
 if os.environ.get("SKIP_CUDA_BUILD") != "1":
     try:
         from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
         NVCC_FLAGS = [
             "-O3",
-            "-arch=sm_90a",
+            f"-arch={CUDA_ARCH}",
             "--use_fast_math",
             "-lineinfo",
             "-DUSE_HOPPER=1",
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
             "-Xcompiler", "-fPIC",
+            "-std=c++20",  # recent PyTorch headers (2.14 tested) refuse anything older
         ]
 
-        CXX_FLAGS = ["-O3", "-std=c++17"]
+        CXX_FLAGS = ["-O3", "-std=c++20"]
 
         include_dirs = ["csrc/kernels", "csrc/pybind"]
         # Header-only CUTLASS/CuTe, cloned by cluster/setup_env.sh (git-ignored).
@@ -42,7 +46,6 @@ if os.environ.get("SKIP_CUDA_BUILD") != "1":
                 ],
                 include_dirs=include_dirs,
                 extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
-                extra_link_args=["-lcuda"],
             )
         ]
 
