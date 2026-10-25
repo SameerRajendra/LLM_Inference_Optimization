@@ -1,0 +1,40 @@
+{
+  "benchmark": "quality_fp8",
+  "label": "fp8-quality-gate",
+  "provenance": {
+    "utc": "2026-08-13T12:34:27Z",
+    "git_sha": "4f5a27e",
+    "git_branch": "decode-engine",
+    "git_subject": "",
+    "git_dirty": null,
+    "git_available": false,
+    "host": "g012",
+    "python": "3.9.18",
+    "torch": "2.8.0+cu128",
+    "cuda": "12.8",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "sm": "sm_90",
+    "hbm_gb": 85.0
+  },
+  "rows": [
+    {
+      "model": "Qwen/Qwen3-8B",
+      "prefill": 2048,
+      "steps": 64,
+      "argmax_parity": 1.0,
+      "top5_hit": 1.0,
+      "kl_ref_fp8": 0.0007578086806461215,
+      "ppl_ref": 2.6217328121166075,
+      "ppl_fp8": 2.6396318778821457,
+      "ppl_delta_pct": 0.6827189133391421,
+      "ref_top1_confidence": 0.9132400751113892,
+      "intercepted": 2304,
+      "passed_through": 36,
+      "verdict": "PASS"
+    }
+  ],
+  "extra": {
+    "protocol": "teacher-forced replay of the fp16 greedy continuation; prefill shared and exact"
+  },
+  "NOTE": "no git binary on this node - SHA read from .git, but working-tree cleanliness was not verified"
+}
