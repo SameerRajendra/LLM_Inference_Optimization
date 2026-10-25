@@ -2,7 +2,9 @@
 
 **A GQA decode-attention kernel for long-context LLM inference on NVIDIA Hopper —
 optimised from 5.8% to 56% of H100 HBM peak (9.7× faster) through measured,
-staged diagnosis, and benchmarked against FlashAttention at every step.**
+staged diagnosis, and benchmarked against FlashAttention at every step. A Triton rewrite
+(169 vs 931 lines) then beat the CUDA kernel another 1.35–1.75× on H100, reaching 89% of HBM peak
+([details](#triton-rewrite-of-the-decode-kernel)).**
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python)
 ![CUDA](https://img.shields.io/badge/CUDA-12.4-green?logo=nvidia)
@@ -27,7 +29,7 @@ serve and how fast.** For Llama-3.1-8B the cache costs 128 KiB per token
 Seven users per $30K GPU — and every decode step must re-read all ~59 GB of
 their cache. Decode is memory-bandwidth-bound, and the bandwidth goes almost
 entirely to the KV cache. This repo attacks that on three fronts: read the
-bytes efficiently (done), store fewer bytes (FP8 KV, in progress), and read
+bytes efficiently (done), store fewer bytes (FP8 KV, done), and read
 fewer of them (paged query-aware sparsity, planned).
 
 ## Measured results
