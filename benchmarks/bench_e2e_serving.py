@@ -13,10 +13,11 @@ Methods (same weights, same prompt, same prefill code; only the KV cache and att
   paged_fp16    sparse_kv paged pool (fp16), torch.ops.sparse_kv append + decode, CUDA graph
   paged_fp8     sparse_kv paged pool (e4m3 + per-page scales), CUDA graph
 
-Prefill: one prompt of `ctx` random tokens runs through the real model (layer by layer, causal
-flash/mem-efficient SDPA), its K/V go into the cache, and the cache is replicated to all B
-sequences (B full copies: decode really reads B * ctx tokens of KV per layer). prefill_ms_1seq is
-that single-sequence prefill, not a batched TTFT.
+Prefill: once per ctx, one prompt of `ctx` random tokens runs through the real model (layer by
+layer, causal flash/mem-efficient SDPA); its per-layer K/V are kept in host memory and written
+into each (B, method)'s cache, then replicated to all B sequences (B full copies: decode really
+reads B * ctx tokens of KV per layer). prefill_ms_1seq is that single-sequence prefill (GPU time
+up to the last-token logits, before the K/V move to host), not a batched TTFT.
 
 CUDA graph rules followed here (see sparse_kv/ops.py):
   * paged_gqa_decode gets max_seq_len = ctx + decode steps (the graph's capacity) explicitly, so
@@ -200,6 +201,45 @@ def prefill(M, ids, sink, chunk=4096):
     return M.logits(h[-1:])
 
 
+def _to_host(t):
+    try:
+        out = torch.empty(t.shape, dtype=t.dtype, pin_memory=True)
+    except RuntimeError:  # pinning can fail under tight locked-memory limits
+        out = torch.empty(t.shape, dtype=t.dtype)
+    out.copy_(t)
+    return out
+
+
+class PrefillCache:
+    """One prefill of `prompt`, shared by every (B, method) at this ctx.
+
+    The per-layer K/V stay on the GPU while prefill is timed (no pool is allocated yet), then
+    move to host memory so they do not shrink the KV pools being benchmarked."""
+
+    def __init__(self, M, prompt):
+        on_gpu = []  # (k, v) per layer
+
+        def sink(l, k, v):
+            on_gpu.append((k.clone(), v.clone()))
+
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        self.logits = prefill(M, prompt, sink)
+        torch.cuda.synchronize()
+        self.ms = (time.perf_counter() - t0) * 1e3
+        self.k, self.v = [], []
+        while on_gpu:  # move layer by layer, freeing each GPU copy as it goes
+            k, v = on_gpu.pop(0)
+            self.k.append(_to_host(k))
+            self.v.append(_to_host(v))
+        torch.cuda.empty_cache()
+
+    def fill(self, st, device):
+        for l in range(len(self.k)):
+            st.sink(l, self.k[l].to(device, non_blocking=True),
+                    self.v[l].to(device, non_blocking=True))
+
+
 # ------------------------------------------------------------------------------- decode state
 
 class DecodeState:
@@ -280,7 +320,8 @@ class DecodeState:
     def step(self):
         M, B, pos = self.M, self.B, self.positions
         if self.paged:
-            self.seq_lens.copy_(pos + 1)
+            # Inactive (warm-up) rows append nothing, so they must not attend to slot `pos`.
+            self.seq_lens.copy_(torch.where(self.active, pos + 1, pos).int())
             blk = self.block_table.gather(1, (pos // self.bs).view(B, 1)).view(B).long()
             slots = torch.where(self.active, blk * self.bs + pos % self.bs,
                                 torch.full_like(pos, -1))  # inactive: append skipped
@@ -331,20 +372,18 @@ def estimate_bytes(M, method, B, ctx, gen, block_size):
     else:
         kv = 2 * L * B * cap * hkv * d * 2
         transient = 2 * B * cap * M.hq * d * 2  # SDPA may expand GQA K/V for one layer
-    prefill = ctx * (8 * M.hidden + 6 * M.hq * d + 6 * M.hkv * d) * 2 + 4096 * 4 * 12288 * 2
-    return kv + max(prefill, transient) + (1 << 30)
+    # Prefill ran once per ctx, before any pool; here only one layer's cached K/V is uploaded at
+    # a time (plus, for paged, the per-block gather in replicate_prefix).
+    upload = 2 * 2 * ctx * hkv * d * 2
+    return kv + max(upload, transient) + (1 << 30)
 
 
-def run_one(M, method, B, ctx, steps, warmup, block_size, prompt, device="cuda"):
+def run_one(M, method, B, ctx, steps, warmup, block_size, pre, device="cuda"):
     gen = warmup + steps
     st = DecodeState(M, method, B, ctx, gen, block_size, device)
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    logits = prefill(M, prompt, st.sink)
-    torch.cuda.synchronize()
-    prefill_ms = (time.perf_counter() - t0) * 1e3
+    pre.fill(st, device)
     st.replicate_prefix()
-    st.start(logits)
+    st.start(pre.logits)
 
     if method == "sdpa_eager":
         fn = st.step
@@ -377,14 +416,14 @@ def run_one(M, method, B, ctx, steps, warmup, block_size, prompt, device="cuda")
     tokens = st.token_log[:, 0].tolist()
     row = {"method": method, "batch": B, "ctx": ctx, "steps": steps,
            "cuda_graph": method in GRAPHED,
-           "prefill_ms_1seq": prefill_ms,
+           "prefill_ms_1seq": pre.ms,
            "itl_ms_mean": sum(itl) / len(itl),
            "itl_ms_p50": itl[len(itl) // 2],
            "itl_ms_p99": itl[min(len(itl) - 1, int(math.ceil(0.99 * len(itl))) - 1)],
            "tok_s": B * steps / wall,
            "kv_cache_gb": st.kv_bytes() / 1e9,
            "peak_mem_gb": torch.cuda.max_memory_allocated() / 1e9}
-    del st, logits
+    del st
     if method != "sdpa_eager":
         del graph, fn
     return row, tokens
@@ -405,6 +444,10 @@ def run_matrix(M, model_name, batches, contexts, methods, steps, warmup, block_s
     for ctx in contexts:
         g = torch.Generator().manual_seed(seed + ctx)
         prompt = torch.randint(0, M.vocab, (ctx,), generator=g).to(device)
+        gc.collect()
+        torch.cuda.empty_cache()
+        pre = PrefillCache(M, prompt)  # one 1-sequence prefill per ctx, reused below
+        print("prefill ctx={}: {:.1f} ms (1 sequence, timed once)".format(ctx, pre.ms))
         for B in batches:
             ref = None
             for method in methods:
@@ -421,7 +464,7 @@ def run_matrix(M, model_name, batches, contexts, methods, steps, warmup, block_s
                                      need_gb=need / 1e9, free_gb=free / 1e9))
                     continue
                 try:
-                    row, tokens = run_one(M, method, B, ctx, steps, warmup, block_size, prompt,
+                    row, tokens = run_one(M, method, B, ctx, steps, warmup, block_size, pre,
                                           device)
                 except torch.cuda.OutOfMemoryError:
                     print("{:>13} B={:<3} ctx={:<6} OOM".format(method, B, ctx))
@@ -435,10 +478,11 @@ def run_matrix(M, model_name, batches, contexts, methods, steps, warmup, block_s
                 row["tokens_head"] = tokens[:16]
                 rows.append(row)
                 print("{:>13} B={:<3} ctx={:<6} ITL {:8.3f} ms (p50 {:.3f}, p99 {:.3f})  "
-                      "{:9.1f} tok/s  KV {:6.2f} GB  prefill {:8.1f} ms  agree {}".format(
+                      "{:9.1f} tok/s  KV {:6.2f} GB  agree {}".format(
                           method, B, ctx, row["itl_ms_mean"], row["itl_ms_p50"],
                           row["itl_ms_p99"], row["tok_s"], row["kv_cache_gb"],
-                          row["prefill_ms_1seq"], row.get("agree_prefix_vs_sdpa_eager", "-")))
+                          row.get("agree_prefix_vs_sdpa_eager", "-")))
+        del pre
     return rows
 
 
@@ -446,7 +490,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--model", default="Qwen/Qwen3-8B",
                     help="HF model id (e.g. meta-llama/Llama-3.1-8B) or 'tiny-random'")
-    ap.add_argument("--batches", default="1,4,16,32,64")
+    ap.add_argument("--batches", default="1,4,8,16,32,64")
     ap.add_argument("--contexts", default="4096,16384,65536")
     ap.add_argument("--methods", default=",".join(METHODS))
     ap.add_argument("--steps", type=int, default=64, help="timed decode steps")

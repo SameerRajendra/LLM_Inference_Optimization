@@ -2,13 +2,19 @@
 
     modal run modal_apps/bench_e2e_h100.py
     modal run modal_apps/bench_e2e_h100.py --model meta-llama/Llama-3.1-8B   # needs HF_SECRET=1
-    modal run modal_apps/bench_e2e_h100.py --batches 1,4 --contexts 4096 --steps 32  # quick
+
+Smoke run first (one case per engine, a few minutes): checks that the image builds and that the
+flashinfer-python pip resolves next to vllm==0.10.2 still has the plan()/run() API used by
+bench_vs_engines.py, before paying for the full sweep:
+
+    modal run modal_apps/bench_e2e_h100.py --batches 1 --vs-batches 1 --contexts 4096 --steps 4
 
 Steps (all in one container, ~1-2 h of H100 for the full sweep):
   1. build the CUDA extension for sm_90a
   2. pytest tests/test_cudagraph_compile.py (capture/replay, fullgraph compile, block recycling)
   3. benchmarks/bench_e2e_serving.py  (SDPA eager / compile vs sparse_kv paged fp16 / fp8)
-  4. benchmarks/bench_vs_engines.py --engine all  (sparse_kv vs FlashInfer kernel vs vLLM)
+  4. benchmarks/bench_vs_engines.py --engine vllm,flashinfer, with step 3's paged rows merged in
+     via --sparse-kv-results (sparse_kv is not measured twice)
 The result JSONs written by bench_common.save_result are copied back into the local results/.
 
 Model weights are cached in the Modal Volume "hf-cache" (downloaded once). Gated models
@@ -49,13 +55,19 @@ hf_cache = modal.Volume.from_name("hf-cache", create_if_missing=True)
 SECRETS = [modal.Secret.from_name("huggingface")] if os.environ.get("HF_SECRET") else []
 
 
+# memory: bench_e2e_serving keeps one ctx's prefill K/V in host RAM (~10 GB at 64K, Qwen3-8B).
 @app.function(image=image, gpu="H100", timeout=3 * 60 * 60, volumes={"/cache": hf_cache},
-              secrets=SECRETS)
+              secrets=SECRETS, memory=48 * 1024)
 def bench(model: str, batches: str, contexts: str, vs_batches: str, steps: int) -> dict:
     start = time.time()
 
     def run(*cmd):
         subprocess.run(cmd, cwd="/app", check=True)
+
+    def new_results(bench_name):
+        found = [p for p in Path("/app/results", bench_name).glob("*.json")
+                 if p.stat().st_mtime >= start]
+        return sorted(found, key=lambda p: p.stat().st_mtime)
 
     run("nvidia-smi")
     run("python", "setup.py", "build_ext", "--inplace")
@@ -63,8 +75,11 @@ def bench(model: str, batches: str, contexts: str, vs_batches: str, steps: int) 
     common = ["--model", model, "--contexts", contexts, "--steps", str(steps)]
     run("python", "benchmarks/bench_e2e_serving.py", "--batches", batches, *common)
     hf_cache.commit()  # keep the downloaded weights even if a later step fails
-    run("python", "benchmarks/bench_vs_engines.py", "--engine", "all", "--batches", vs_batches,
-        *common)
+
+    e2e = new_results("e2e_serving")
+    merge = ["--sparse-kv-results", str(e2e[-1])] if e2e else []
+    run("python", "benchmarks/bench_vs_engines.py", "--engine", "vllm,flashinfer",
+        "--batches", vs_batches, *common, *merge)
 
     out = {}
     for path in Path("/app/results").rglob("*.json"):
@@ -74,8 +89,8 @@ def bench(model: str, batches: str, contexts: str, vs_batches: str, steps: int) 
 
 
 @app.local_entrypoint()
-def main(model: str = "Qwen/Qwen3-8B", batches: str = "1,4,16,32,64",
-         contexts: str = "4096,16384,65536", vs_batches: str = "1,4,16,32", steps: int = 64):
+def main(model: str = "Qwen/Qwen3-8B", batches: str = "1,4,8,16,32,64",
+         contexts: str = "4096,16384,65536", vs_batches: str = "1,4,8,16,32", steps: int = 64):
     files = bench.remote(model, batches, contexts, vs_batches, steps)
     for rel, text in files.items():
         dst = REPO_ROOT / rel

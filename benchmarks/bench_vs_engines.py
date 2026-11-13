@@ -13,11 +13,20 @@ Engines (each optional; a missing package skips its rows instead of failing the 
               replayed from CUDA graphs. FlashInfer FP8 uses a per-tensor scale (ours is
               per-page), so FP8 rows are timing-only.
 
-`--engine all` runs every engine in its own subprocess (vLLM reserves most of the GPU, and its
-engine does not tear down cleanly in-process), merges the rows and saves one result file.
+`--engine` takes one engine or a comma-separated list (`all` = sparse_kv,flashinfer,vllm). With
+more than one, every engine runs in its own subprocess (vLLM reserves most of the GPU, and its
+engine does not tear down cleanly in-process; vllm runs once per kv dtype, auto and fp8), the
+rows are merged and one result file is saved.
+
+bench_e2e_serving.py already measures sparse_kv paged_fp16 / paged_fp8. To avoid running them
+twice, leave sparse_kv out (or pass --skip-sparse-kv) and point --sparse-kv-results at that run's
+results/e2e_serving/*.json: its paged rows are copied in unchanged (tagged with the source file)
+so the summary still lines them up against vLLM.
 
 Run:
   python benchmarks/bench_vs_engines.py --engine all
+  python benchmarks/bench_vs_engines.py --engine vllm,flashinfer \
+      --sparse-kv-results results/e2e_serving/<run>.json
   python benchmarks/bench_vs_engines.py --engine flashinfer --batches 1,16 --contexts 16384
 
 NOTE: keep this file Python-3.9 compatible (no `X | None` annotations).
@@ -266,10 +275,31 @@ def _child(args, engine, extra_flags):
     return payload["rows"], payload["extra"], "".join(log)
 
 
-def run_all(args):
+def load_sparse_kv_results(path):
+    """paged_fp16 / paged_fp8 rows of a bench_e2e_serving.py result file, as sparse_kv rows."""
+    with open(path) as f:
+        payload = json.load(f)
+    rows = []
+    for r in payload["rows"]:
+        if r.get("method") not in ("paged_fp16", "paged_fp8"):
+            continue
+        r = dict(r, engine="sparse_kv", source=os.path.basename(path))
+        if "itl_ms_mean" in r:
+            r["tpot_ms"] = r["itl_ms_mean"]
+            r["tok_s_from_tpot"] = r["batch"] / r["tpot_ms"] * 1e3
+        rows.append(r)
+    return rows, {"sparse_kv_source": os.path.basename(path),
+                  "sparse_kv_source_provenance": payload.get("provenance")}
+
+
+def run_jobs(args, engines):
     rows, extra = [], {}
-    jobs = [("sparse_kv", []), ("flashinfer", []),
-            ("vllm", ["--vllm-kv-dtype", "auto"]), ("vllm", ["--vllm-kv-dtype", "fp8"])]
+    jobs = []
+    for engine in engines:
+        if engine == "vllm":
+            jobs += [("vllm", ["--vllm-kv-dtype", "auto"]), ("vllm", ["--vllm-kv-dtype", "fp8"])]
+        else:
+            jobs.append((engine, []))
     for engine, flags in jobs:
         r, x, log = _child(args, engine, flags)
         if engine == "vllm":
@@ -297,23 +327,31 @@ def summarize(rows):
 
     keys = sorted({(r["ctx"], r["batch"]) for r in rows if "batch" in r})
     print("\nTPOT ms (lower is better)        ours fp16  vllm fp16   ours fp8   vllm fp8"
-          "   | attn kernel ours/flashinfer fp16")
+          "   | attn kernel ours/flashinfer:     fp16      fp8")
     fmt = lambda x: "{:10.3f}".format(x) if x is not None else "{:>10}".format("-")  # noqa: E731
+    rfmt = lambda x: "{:8.2f}x".format(x) if x is not None else "{:>9}".format("-")  # noqa: E731
     for ctx, B in keys:
-        ratio = get("flashinfer", "kernel_fp16", B, ctx, "ours_over_flashinfer")
-        print("ctx {:>6} B {:>3}               {} {} {} {}   | {}".format(
-            ctx, B, fmt(get("sparse_kv", "paged_fp16", B, ctx, "tpot_ms")),
-            fmt(get("vllm", "vllm_fp16", B, ctx, "tpot_ms")),
-            fmt(get("sparse_kv", "paged_fp8", B, ctx, "tpot_ms")),
-            fmt(get("vllm", "vllm_fp8", B, ctx, "tpot_ms")),
-            "{:.2f}x".format(ratio) if ratio is not None else "-"))
+        print("ctx {:>6} B {:>3}               {} {} {} {}   |                         {} {}"
+              .format(ctx, B, fmt(get("sparse_kv", "paged_fp16", B, ctx, "tpot_ms")),
+                      fmt(get("vllm", "vllm_fp16", B, ctx, "tpot_ms")),
+                      fmt(get("sparse_kv", "paged_fp8", B, ctx, "tpot_ms")),
+                      fmt(get("vllm", "vllm_fp8", B, ctx, "tpot_ms")),
+                      rfmt(get("flashinfer", "kernel_fp16", B, ctx, "ours_over_flashinfer")),
+                      rfmt(get("flashinfer", "kernel_fp8", B, ctx, "ours_over_flashinfer"))))
+    print("kernel ratio < 1.0 = ours faster; fp8 kernel rows are timing-only (scales differ).")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--engine", default="all", choices=["all"] + sorted(ENGINES))
+    ap.add_argument("--engine", default="all",
+                    help="all, or a comma-separated subset of: " + ",".join(sorted(ENGINES)))
+    ap.add_argument("--skip-sparse-kv", action="store_true",
+                    help="drop sparse_kv (already measured by bench_e2e_serving.py)")
+    ap.add_argument("--sparse-kv-results", default="",
+                    help="bench_e2e_serving.py result JSON whose paged rows join the summary "
+                         "(implies --skip-sparse-kv)")
     ap.add_argument("--model", default="Qwen/Qwen3-8B")
-    ap.add_argument("--batches", default="1,4,16,32")
+    ap.add_argument("--batches", default="1,4,8,16,32")
     ap.add_argument("--contexts", default="4096,16384,65536")
     ap.add_argument("--steps", type=int, default=64)
     ap.add_argument("--warmup", type=int, default=8)
@@ -328,10 +366,24 @@ def main():
     args.batches = [int(x) for x in args.batches.split(",")]
     args.contexts = [int(x) for x in args.contexts.split(",")]
 
-    if args.engine == "all":
-        rows, extra = run_all(args)
+    engines = sorted(ENGINES) if args.engine == "all" else [
+        e.strip() for e in args.engine.split(",") if e.strip()]
+    for e in engines:
+        if e not in ENGINES:
+            raise SystemExit("unknown engine {} (choose from {})".format(e, sorted(ENGINES)))
+    if args.skip_sparse_kv or args.sparse_kv_results:
+        engines = [e for e in engines if e != "sparse_kv"]
+
+    # One engine runs in-process (always so in a child); several, or vllm at both kv dtypes,
+    # run as isolated subprocesses.
+    if len(engines) == 1 and (engines[0] != "vllm" or args.rows_out):
+        rows, extra = ENGINES[engines[0]](args)
     else:
-        rows, extra = ENGINES[args.engine](args)
+        rows, extra = run_jobs(args, engines)
+    if args.sparse_kv_results:
+        r, x = load_sparse_kv_results(args.sparse_kv_results)
+        rows += r
+        extra.update(x)
 
     if args.rows_out:
         with open(args.rows_out, "w") as f:
