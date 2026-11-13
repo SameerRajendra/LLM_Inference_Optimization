@@ -21,6 +21,8 @@ if os.environ.get("SKIP_CUDA_BUILD") != "1":
             "-Xcompiler", "-fPIC",
             "-std=c++20",  # recent PyTorch headers (2.14 tested) refuse anything older
         ]
+        if os.environ.get("PTXAS_VERBOSE") == "1":
+            NVCC_FLAGS.append("-Xptxas=-v")
 
         CXX_FLAGS = ["-O3", "-std=c++20"]
 
@@ -42,6 +44,7 @@ if os.environ.get("SKIP_CUDA_BUILD") != "1":
                     "csrc/kernels/kv_evict_quant.cu",
                     "csrc/kernels/sparse_attention.cu",
                     "csrc/kernels/gqa_decode.cu",
+                    "csrc/kernels/gqa_decode_tc.cu",
                     "csrc/kernels/kv_fp8.cu",
                 ],
                 include_dirs=include_dirs,

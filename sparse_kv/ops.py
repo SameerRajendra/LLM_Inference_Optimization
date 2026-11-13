@@ -66,6 +66,29 @@ def _(q, kq, vq, k_scale, v_scale, scale):
     return q.new_empty(q.shape)
 
 
+@torch.library.custom_op("sparse_kv::fused_gqa_tc", mutates_args=())
+def _fused_gqa_tc(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+                  scale: float, causal: bool) -> torch.Tensor:
+    return _ext().fused_gqa_tc(q, k, v, scale, causal)
+
+
+@_fused_gqa_tc.register_fake
+def _(q, k, v, scale, causal):
+    return q.new_empty(q.shape)
+
+
+@torch.library.custom_op("sparse_kv::fused_gqa_tc_fp8", mutates_args=())
+def _fused_gqa_tc_fp8(q: torch.Tensor, kq: torch.Tensor, vq: torch.Tensor,
+                      k_scale: torch.Tensor, v_scale: torch.Tensor,
+                      scale: float, causal: bool) -> torch.Tensor:
+    return _ext().fused_gqa_tc_fp8(q, kq, vq, k_scale, v_scale, scale, causal)
+
+
+@_fused_gqa_tc_fp8.register_fake
+def _(q, kq, vq, k_scale, v_scale, scale, causal):
+    return q.new_empty(q.shape)
+
+
 # --------------------------------------------------------------------------------- Triton ops
 
 @torch.library.custom_op("sparse_kv::triton_gqa_decode", mutates_args=())
@@ -135,6 +158,15 @@ def fused_gqa_v4(q, k, v, scale=None):
 
 def fused_gqa_v4_fp8(q, kq, vq, k_scale, v_scale, scale=None):
     return torch.ops.sparse_kv.fused_gqa_v4_fp8(q, kq, vq, k_scale, v_scale, _scale(q, scale))
+
+
+def fused_gqa_tc(q, k, v, scale=None, causal=False):
+    return torch.ops.sparse_kv.fused_gqa_tc(q, k, v, _scale(q, scale), bool(causal))
+
+
+def fused_gqa_tc_fp8(q, kq, vq, k_scale, v_scale, scale=None, causal=False):
+    return torch.ops.sparse_kv.fused_gqa_tc_fp8(
+        q, kq, vq, k_scale, v_scale, _scale(q, scale), bool(causal))
 
 
 def triton_gqa_decode(q, k, v, scale=None, k_scale=None, v_scale=None, num_splits=None):

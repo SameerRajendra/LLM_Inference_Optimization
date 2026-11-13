@@ -76,6 +76,9 @@ def kernels(B, N):
     if _C is not None and hasattr(_C, "fused_gqa_v4_fp8"):
         out["cuda_v4"] = (lambda: _C.fused_gqa_v4(q, k, v, scale), 2)
         out["cuda_v4_fp8"] = (lambda: _C.fused_gqa_v4_fp8(q, kq, vq, ks, vs, scale), 1)
+    if _C is not None and hasattr(_C, "fused_gqa_tc"):
+        out["cuda_tc"] = (lambda: _C.fused_gqa_tc(q, k, v, scale), 2)
+        out["cuda_tc_fp8"] = (lambda: _C.fused_gqa_tc_fp8(q, kq, vq, ks, vs, scale), 1)
     out["triton_fp16"] = (lambda: gqa_decode(q, k, v), 2)
     out["triton_fp8"] = (lambda: gqa_decode(q, kq, vq, k_scale=ks, v_scale=vs), 1)
     return out
