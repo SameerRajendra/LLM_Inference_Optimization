@@ -480,28 +480,29 @@ __global__ void __launch_bounds__(TC_THREADS, 2) gqa_decode_tc_kernel(
                              a0, a1, a2, a3, b0_1, b1_1);
             }
         } else {
-            const int tok0 = warp_tok_base + 2 * tid_in_group;
-            const int tok1 = tok0 + 1;
-            const int tok8 = tok0 + 8;
-            const int tok9 = tok0 + 9;
-            #pragma unroll 2
+            const int tok0    = warp_tok_base + 2 * tid_in_group;
+            const int tok1    = tok0 + 1;
+            const int tok0_sw = tok0 & SWIZ_MASK;
+            const int tok1_sw = tok1 & SWIZ_MASK;
+            const uint8_t* v_row0 = v_tile + tok0 * HEAD_DIM + group_id;
+            const uint8_t* v_row1 = v_tile + tok1 * HEAD_DIM + group_id;
+            const uint8_t* v_row8 = v_row0 + 8 * HEAD_DIM;
+            const uint8_t* v_row9 = v_row1 + 8 * HEAD_DIM;
+            #pragma unroll
             for (int np = 0; np < NUM_N8_TILES / 2; np++) {
-                const int sw0 = (np ^ (tok0 & SWIZ_MASK)) * 16 + group_id;
-                const int sw1 = (np ^ (tok1 & SWIZ_MASK)) * 16 + group_id;
-                const uint8_t* kp0 = v_tile + tok0 * HEAD_DIM + sw0;
-                const uint8_t* kp1 = v_tile + tok1 * HEAD_DIM + sw1;
-                const uint8_t* kp8 = v_tile + tok8 * HEAD_DIM + sw0;
-                const uint8_t* kp9 = v_tile + tok9 * HEAD_DIM + sw1;
+                const int sw0 = (np ^ tok0_sw) * 16;
+                const int sw1 = (np ^ tok1_sw) * 16;
 
                 #pragma unroll
                 for (int half_n = 0; half_n < 2; half_n++) {
-                    const int d_add = half_n * 8;
+                    const int d0 = sw0 + half_n * 8;
+                    const int d1 = sw1 + half_n * 8;
                     const uint16_t raw0 =
-                        static_cast<uint16_t>(kp0[d_add]) |
-                        (static_cast<uint16_t>(kp1[d_add]) << 8);
+                        static_cast<uint16_t>(v_row0[d0]) |
+                        (static_cast<uint16_t>(v_row1[d1]) << 8);
                     const uint16_t raw1 =
-                        static_cast<uint16_t>(kp8[d_add]) |
-                        (static_cast<uint16_t>(kp9[d_add]) << 8);
+                        static_cast<uint16_t>(v_row8[d0]) |
+                        (static_cast<uint16_t>(v_row9[d1]) << 8);
                     float tmp0 = 0.f, tmp1 = 0.f, tmp2 = 0.f, tmp3 = 0.f;
                     mma_m16n8k16(tmp0, tmp1, tmp2, tmp3,
                                  a0, a1, a2, a3,
