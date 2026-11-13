@@ -1,0 +1,84 @@
+"""WP-2 on a Modal H100: CUDA-graph tests, real e2e decode benchmark, FlashInfer / vLLM head-to-head.
+
+    modal run modal_apps/bench_e2e_h100.py
+    modal run modal_apps/bench_e2e_h100.py --model meta-llama/Llama-3.1-8B   # needs HF_SECRET=1
+    modal run modal_apps/bench_e2e_h100.py --batches 1,4 --contexts 4096 --steps 32  # quick
+
+Steps (all in one container, ~1-2 h of H100 for the full sweep):
+  1. build the CUDA extension for sm_90a
+  2. pytest tests/test_cudagraph_compile.py (capture/replay, fullgraph compile, block recycling)
+  3. benchmarks/bench_e2e_serving.py  (SDPA eager / compile vs sparse_kv paged fp16 / fp8)
+  4. benchmarks/bench_vs_engines.py --engine all  (sparse_kv vs FlashInfer kernel vs vLLM)
+The result JSONs written by bench_common.save_result are copied back into the local results/.
+
+Model weights are cached in the Modal Volume "hf-cache" (downloaded once). Gated models
+(meta-llama/*) need a Modal secret named "huggingface" holding HF_TOKEN; export HF_SECRET=1 when
+running so it is attached.
+"""
+import os
+import subprocess
+import time
+from pathlib import Path
+
+import modal
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# vLLM pins its torch build (0.10.2 -> torch 2.8.0 / CUDA 12.8, the stack of the earlier H100
+# results), so install it first and build our extension against that torch. The -devel image
+# carries nvcc for the extension build.
+image = (
+    modal.Image.from_registry("nvidia/cuda:12.8.1-devel-ubuntu22.04", add_python="3.11")
+    .pip_install("vllm==0.10.2")
+    .pip_install("flashinfer-python")
+    .pip_install("numpy", "pytest", "ninja", "pybind11", "setuptools", "wheel", "packaging",
+                 "transformers>=4.51", "accelerate")
+    # Modal's add_python build was made with clang; build the extension with gcc.
+    .env({"CC": "gcc", "CXX": "g++", "LDSHARED": "g++ -pthread -shared",
+          "HF_HOME": "/cache/hf", "TOKENIZERS_PARALLELISM": "false"})
+    .workdir("/app")
+)
+# Whitelist, not the whole repo: it also holds personal files that must not leave the machine.
+for name in ("csrc", "sparse_kv", "triton_kernels", "tests", "benchmarks", ".git/refs"):
+    image = image.add_local_dir(REPO_ROOT / name, f"/app/{name}", ignore=["**/__pycache__", "**/*.so"])
+for name in ("setup.py", "pyproject.toml", ".git/HEAD"):
+    image = image.add_local_file(REPO_ROOT / name, f"/app/{name}")
+
+app = modal.App("e2e-decode-bench")
+hf_cache = modal.Volume.from_name("hf-cache", create_if_missing=True)
+SECRETS = [modal.Secret.from_name("huggingface")] if os.environ.get("HF_SECRET") else []
+
+
+@app.function(image=image, gpu="H100", timeout=3 * 60 * 60, volumes={"/cache": hf_cache},
+              secrets=SECRETS)
+def bench(model: str, batches: str, contexts: str, vs_batches: str, steps: int) -> dict:
+    start = time.time()
+
+    def run(*cmd):
+        subprocess.run(cmd, cwd="/app", check=True)
+
+    run("nvidia-smi")
+    run("python", "setup.py", "build_ext", "--inplace")
+    run("python", "-m", "pytest", "tests/test_cudagraph_compile.py", "-v")
+    common = ["--model", model, "--contexts", contexts, "--steps", str(steps)]
+    run("python", "benchmarks/bench_e2e_serving.py", "--batches", batches, *common)
+    hf_cache.commit()  # keep the downloaded weights even if a later step fails
+    run("python", "benchmarks/bench_vs_engines.py", "--engine", "all", "--batches", vs_batches,
+        *common)
+
+    out = {}
+    for path in Path("/app/results").rglob("*.json"):
+        if path.stat().st_mtime >= start:
+            out[str(path.relative_to("/app"))] = path.read_text()
+    return out
+
+
+@app.local_entrypoint()
+def main(model: str = "Qwen/Qwen3-8B", batches: str = "1,4,16,32,64",
+         contexts: str = "4096,16384,65536", vs_batches: str = "1,4,16,32", steps: int = 64):
+    files = bench.remote(model, batches, contexts, vs_batches, steps)
+    for rel, text in files.items():
+        dst = REPO_ROOT / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(text)
+        print("wrote", dst)

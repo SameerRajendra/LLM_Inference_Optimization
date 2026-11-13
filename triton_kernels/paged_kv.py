@@ -7,7 +7,8 @@ Pool contract (shared with paged_gqa_decode.py):
     slot_mapping      [num_tokens] int, slot = physical_block * block_size + offset; < 0 skips
 
 FP8 scales: one per (64-token page, kv head), equal to the largest |x| / 448 ever appended to
-that page. A scale of 0 marks a page that is empty (or all zero); allocate scales with zeros.
+that page. A scale of 0 marks a page that is empty (or all zero); allocate scales with zeros,
+and zero them again whenever a block is recycled (reset_block_scales / BlockAllocator.free).
 Unlike quantize_kv_fp8, an all-zero page keeps scale 0, so a later small token still gets the
 full e4m3 range instead of being stuck with scale 1.
 
@@ -45,6 +46,50 @@ def allocate_paged_kv_cache(num_blocks, block_size, num_kv_heads, head_dim, fp8=
     scale_shape = (num_blocks, block_size // KV_PAGE_TOKENS, num_kv_heads)
     ks = torch.zeros(scale_shape, dtype=torch.float32, device=device)
     return k, torch.zeros_like(k), ks, torch.zeros_like(ks)
+
+
+def reset_block_scales(blocks, *scales):
+    """Zero the FP8 page scales of physical `blocks` (dim 0 of every scale tensor), marking their
+    pages empty. Must run whenever a block is recycled: a stale scale would make the next owner
+    quantise with the previous sequence's range (precision loss for smaller values), and the
+    append would re-encode stale bytes as if they belonged to the page. No host sync."""
+    scales = [s for s in scales if s is not None]
+    if not scales:
+        return
+    idx = torch.as_tensor(blocks, dtype=torch.long).to(scales[0].device, non_blocking=True)
+    if idx.numel() == 0:
+        return
+    for s in scales:
+        s.index_fill_(0, idx, 0.0)
+
+
+class BlockAllocator:
+    """Host-side free list over a pool's physical blocks.
+
+    `scales` are the FP8 scale tensors whose dim 0 is the physical block (k_scale and v_scale,
+    or one pair per layer); freed blocks get their scales zeroed so a recycled block starts
+    empty. The data bytes are left alone: with scale 0 nothing re-encodes them, and decode masks
+    every slot at or past seq_len."""
+
+    def __init__(self, num_blocks, scales=()):
+        self.num_blocks = num_blocks
+        self.scales = [s for s in scales if s is not None]
+        self._free = list(range(num_blocks - 1, -1, -1))  # pop() hands out 0, 1, 2, ...
+
+    @property
+    def num_free(self):
+        return len(self._free)
+
+    def allocate(self, n):
+        if n > len(self._free):
+            raise RuntimeError("paged KV pool exhausted: need {}, {} free".format(
+                n, len(self._free)))
+        return [self._free.pop() for _ in range(n)]
+
+    def free(self, blocks):
+        blocks = [int(b) for b in blocks]
+        reset_block_scales(blocks, *self.scales)
+        self._free.extend(reversed(blocks))
 
 
 @triton.jit
