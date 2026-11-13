@@ -12,6 +12,10 @@ output shapes), and torch.cuda.CUDAGraph can capture them like any aten op.
     torch.ops.sparse_kv.reshape_and_cache(k_new, v_new, k_cache, v_cache, slot_mapping)
     torch.ops.sparse_kv.reshape_and_cache_fp8(k_new, v_new, k_cache, v_cache, k_scale, v_scale,
                                               slot_mapping)
+    torch.ops.sparse_kv.update_page_minmax(k_new, slot_mapping, k_min, k_max, block_size)  WP-4
+    torch.ops.sparse_kv.quest_sparse_decode(q, k_cache, v_cache, block_table, seq_lens, k_min,
+                                            k_max, top_k_pages, recent_pages, scale, k_scale,
+                                            v_scale, max_seq_len, num_splits)
 
 num_splits == 0 means "use the kernel's heuristic". paged_gqa_decode takes max_seq_len as a
 required int: it sizes the split grid on the host, so it can never fall back to the
@@ -32,6 +36,7 @@ import torch
 from triton_kernels import gqa_decode as _gqa
 from triton_kernels import paged_gqa_decode as _paged
 from triton_kernels import paged_kv as _pkv
+from triton_kernels import quest_sparse_decode as _quest
 
 
 def _ext():
@@ -146,6 +151,35 @@ def _(k_new, v_new, k_cache, v_cache, k_scale, v_scale, slot_mapping):
     return None
 
 
+@torch.library.custom_op("sparse_kv::update_page_minmax", mutates_args=("k_min", "k_max"))
+def _update_page_minmax(k_new: torch.Tensor, slot_mapping: torch.Tensor, k_min: torch.Tensor,
+                        k_max: torch.Tensor, block_size: int) -> None:
+    _pkv.update_page_minmax(k_new, slot_mapping, k_min, k_max, block_size)
+
+
+@_update_page_minmax.register_fake
+def _(k_new, slot_mapping, k_min, k_max, block_size):
+    return None
+
+
+@torch.library.custom_op("sparse_kv::quest_sparse_decode", mutates_args=())
+def _quest_sparse_decode(q: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor,
+                         block_table: torch.Tensor, seq_lens: torch.Tensor, k_min: torch.Tensor,
+                         k_max: torch.Tensor, top_k_pages: int, recent_pages: int, scale: float,
+                         k_scale: Optional[torch.Tensor], v_scale: Optional[torch.Tensor],
+                         max_seq_len: int, num_splits: int) -> torch.Tensor:
+    return _quest.quest_sparse_decode(q, k_cache, v_cache, block_table, seq_lens, k_min, k_max,
+                                      top_k_pages, recent_pages=recent_pages, scale=scale,
+                                      k_scale=k_scale, v_scale=v_scale, max_seq_len=max_seq_len,
+                                      num_splits=num_splits or None)
+
+
+@_quest_sparse_decode.register_fake
+def _(q, k_cache, v_cache, block_table, seq_lens, k_min, k_max, top_k_pages, recent_pages, scale,
+      k_scale, v_scale, max_seq_len, num_splits):
+    return q.new_empty(q.shape)
+
+
 # ------------------------------------------------------------------------- Python entry points
 
 def _scale(q, scale):
@@ -182,12 +216,28 @@ def paged_gqa_decode(q, k_cache, v_cache, block_table, seq_lens, max_seq_len, sc
                                                 int(max_seq_len), num_splits or 0)
 
 
-def reshape_and_cache(k_new, v_new, k_cache, v_cache, slot_mapping, k_scale=None, v_scale=None):
+def reshape_and_cache(k_new, v_new, k_cache, v_cache, slot_mapping, k_scale=None, v_scale=None,
+                      k_min=None, k_max=None):
+    """k_min/k_max (optional, WP-4): Quest page bounds [num_blocks, Hkv, D] fp16, updated
+    in place from the fp16 keys before they are stored."""
+    if k_min is not None or k_max is not None:
+        torch.ops.sparse_kv.update_page_minmax(k_new, slot_mapping, k_min, k_max,
+                                               int(k_cache.shape[1]))
     if k_scale is None:
         torch.ops.sparse_kv.reshape_and_cache(k_new, v_new, k_cache, v_cache, slot_mapping)
     else:
         torch.ops.sparse_kv.reshape_and_cache_fp8(k_new, v_new, k_cache, v_cache, k_scale,
                                                   v_scale, slot_mapping)
+
+
+def quest_sparse_decode(q, k_cache, v_cache, block_table, seq_lens, k_min, k_max, top_k_pages,
+                        max_seq_len, recent_pages=1, scale=None, k_scale=None, v_scale=None,
+                        num_splits=None):
+    """max_seq_len is required (fixed for a captured graph), so the op never syncs the host."""
+    return torch.ops.sparse_kv.quest_sparse_decode(
+        q, k_cache, v_cache, block_table, seq_lens, k_min, k_max, int(top_k_pages),
+        int(recent_pages), _scale(q, scale), k_scale, v_scale, int(max_seq_len),
+        num_splits or 0)
 
 
 # ------------------------------------------------------------------------ CUDA-graph helpers
@@ -196,7 +246,8 @@ def autotune_cache_sizes() -> Dict[str, int]:
     """Number of autotuned keys per Triton decode kernel. Constant across a capture means no
     autotuning (benchmarking + synchronize) happened inside it."""
     return {"paged_split": len(_paged._paged_split_kernel.cache),
-            "decode_split": len(_gqa._decode_split_kernel.cache)}
+            "decode_split": len(_gqa._decode_split_kernel.cache),
+            "quest_split": len(_quest._quest_split_kernel.cache)}
 
 
 def _side_stream_run(fn: Callable[[], object], iters: int):

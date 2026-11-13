@@ -22,6 +22,14 @@ The append is three launches, ordered by the stream:
     2. rescale  one program per touched (page, head) re-encodes the page if its scale grew
     3. store    every token quantised with its page's final scale and scattered to its slot
 Nothing syncs with the host, so the append can be captured in a CUDA graph.
+
+Quest page metadata (WP-4, opt-in): pass k_min/k_max [num_blocks, Hkv, D] fp16 (from
+allocate_page_minmax) to reshape_and_cache* / apply_rope_and_cache and every append also folds
+its fp16 keys (post-RoPE, pre-quantisation) into a channelwise running min/max per physical
+block. Empty blocks hold k_min = +inf, k_max = -inf; reset them with reset_block_minmax (or
+BlockAllocator(page_bounds=...)) when a block is recycled. The update is a scatter-reduce of
+min/max, which is order independent, so it is deterministic, needs no host sync and can be
+captured in a CUDA graph. Callers that do not pass the tensors get exactly the WP-1 behaviour.
 """
 from __future__ import annotations
 
@@ -63,17 +71,54 @@ def reset_block_scales(blocks, *scales):
         s.index_fill_(0, idx, 0.0)
 
 
+def allocate_page_minmax(num_blocks, num_kv_heads, head_dim, device="cuda"):
+    """Quest page metadata: (k_min, k_max) [num_blocks, Hkv, D] fp16, initialised empty
+    (k_min = +inf, k_max = -inf) so the first append to a block sets both exactly."""
+    shape = (num_blocks, num_kv_heads, head_dim)
+    k_min = torch.full(shape, float("inf"), dtype=torch.float16, device=device)
+    k_max = torch.full(shape, float("-inf"), dtype=torch.float16, device=device)
+    return k_min, k_max
+
+
+def reset_block_minmax(blocks, k_min, k_max):
+    """Mark physical `blocks` empty in the Quest metadata. Must run whenever a block is
+    recycled, or the stale bounds of the previous owner would widen the new owner's bounds."""
+    idx = torch.as_tensor(blocks, dtype=torch.long).to(k_min.device, non_blocking=True)
+    if idx.numel() == 0:
+        return
+    k_min.index_fill_(0, idx, float("inf"))
+    k_max.index_fill_(0, idx, float("-inf"))
+
+
+def update_page_minmax(k_new, slot_mapping, k_min, k_max, block_size):
+    """Fold [T, Hkv, D] fp16 keys into the running channelwise min/max of their physical blocks.
+    Tokens with slot < 0 are skipped (their contribution is +inf / -inf, the reduce identity)."""
+    T, Hkv, D = k_new.shape
+    assert k_min.shape == k_max.shape and k_min.shape[1:] == (Hkv, D)
+    assert k_min.dtype == torch.float16 and k_max.dtype == torch.float16
+    if T == 0:
+        return
+    slots = slot_mapping.long()
+    valid = (slots >= 0).view(T, 1, 1)
+    idx = (slots.clamp_min(0) // block_size).view(T, 1, 1).expand(T, Hkv, D)
+    k = k_new.to(torch.float16)
+    k_min.scatter_reduce_(0, idx, torch.where(valid, k, float("inf")), reduce="amin")
+    k_max.scatter_reduce_(0, idx, torch.where(valid, k, float("-inf")), reduce="amax")
+
+
 class BlockAllocator:
     """Host-side free list over a pool's physical blocks.
 
     `scales` are the FP8 scale tensors whose dim 0 is the physical block (k_scale and v_scale,
     or one pair per layer); freed blocks get their scales zeroed so a recycled block starts
     empty. The data bytes are left alone: with scale 0 nothing re-encodes them, and decode masks
-    every slot at or past seq_len."""
+    every slot at or past seq_len. `page_bounds` are optional Quest (k_min, k_max) pairs (one per
+    layer); freed blocks get them reset to empty."""
 
-    def __init__(self, num_blocks, scales=()):
+    def __init__(self, num_blocks, scales=(), page_bounds=()):
         self.num_blocks = num_blocks
         self.scales = [s for s in scales if s is not None]
+        self.page_bounds = [pb for pb in page_bounds if pb is not None]
         self._free = list(range(num_blocks - 1, -1, -1))  # pop() hands out 0, 1, 2, ...
 
     @property
@@ -89,6 +134,8 @@ class BlockAllocator:
     def free(self, blocks):
         blocks = [int(b) for b in blocks]
         reset_block_scales(blocks, *self.scales)
+        for k_min, k_max in self.page_bounds:
+            reset_block_minmax(blocks, k_min, k_max)
         self._free.extend(reversed(blocks))
 
 
@@ -208,21 +255,34 @@ def _check(k_new, v_new, k_cache, v_cache, slot_mapping):
     return k_new.contiguous(), v_new.contiguous(), slot_mapping.contiguous()
 
 
-def reshape_and_cache(k_new, v_new, k_cache, v_cache, slot_mapping):
-    """fp16 pool: scatter [T, Hkv, D] K/V into their slots."""
+def _maybe_minmax(k_new, slot_mapping, k_cache, k_min, k_max):
+    if k_min is None and k_max is None:
+        return
+    assert k_min is not None and k_max is not None, "pass both k_min and k_max"
+    assert k_min.shape == (k_cache.shape[0],) + tuple(k_cache.shape[2:]), \
+        "k_min/k_max must be [num_blocks, Hkv, D]"
+    update_page_minmax(k_new, slot_mapping, k_min, k_max, k_cache.shape[1])
+
+
+def reshape_and_cache(k_new, v_new, k_cache, v_cache, slot_mapping, k_min=None, k_max=None):
+    """fp16 pool: scatter [T, Hkv, D] K/V into their slots. k_min/k_max (optional) are the
+    Quest page bounds, updated in place."""
     k_new, v_new, slot_mapping = _check(k_new, v_new, k_cache, v_cache, slot_mapping)
     assert k_cache.dtype == torch.float16
     T, Hkv, D = k_new.shape
     if T == 0:
         return
+    _maybe_minmax(k_new, slot_mapping, k_cache, k_min, k_max)
     _kv_store_kernel[(T,)](k_new, v_new, k_cache, v_cache, None, None, slot_mapping, Hkv,
                            D=D, PAGE=KV_PAGE_TOKENS,
                            BLOCK_HKV=triton.next_power_of_2(Hkv), FP8=False)
 
 
-def reshape_and_cache_fp8(k_new, v_new, k_cache, v_cache, k_scale, v_scale, slot_mapping):
+def reshape_and_cache_fp8(k_new, v_new, k_cache, v_cache, k_scale, v_scale, slot_mapping,
+                          k_min=None, k_max=None):
     """FP8 pool: quantise [T, Hkv, D] fp16 K/V to e4m3, scatter to their slots, and keep the
-    per-page scales (updated in place) covering every token ever appended to the page."""
+    per-page scales (updated in place) covering every token ever appended to the page.
+    k_min/k_max (optional) track the fp16 keys before quantisation."""
     k_new, v_new, slot_mapping = _check(k_new, v_new, k_cache, v_cache, slot_mapping)
     assert k_cache.dtype == torch.uint8, "FP8 pool holds e4m3 bits as uint8"
     num_blocks, block_size, Hkv, D = k_cache.shape
@@ -233,6 +293,7 @@ def reshape_and_cache_fp8(k_new, v_new, k_cache, v_cache, k_scale, v_scale, slot
     T = k_new.shape[0]
     if T == 0:
         return
+    _maybe_minmax(k_new, slot_mapping, k_cache, k_min, k_max)
 
     # Sort the destination pages so each page's leader can be found without a host sync,
     # and snapshot the pre-append scales the existing bytes were encoded with.
@@ -263,11 +324,13 @@ def apply_rope(x, cos, sin, positions):
 
 
 def apply_rope_and_cache(k_new, v_new, k_cache, v_cache, slot_mapping, cos, sin, positions,
-                         k_scale=None, v_scale=None):
-    """Rotate K, then append to the pool (FP8 when scales are given). Returns the rotated K."""
+                         k_scale=None, v_scale=None, k_min=None, k_max=None):
+    """Rotate K, then append to the pool (FP8 when scales are given). Returns the rotated K.
+    k_min/k_max (optional) are the Quest page bounds of the rotated keys."""
     k_rot = apply_rope(k_new, cos, sin, positions)
     if k_scale is None:
-        reshape_and_cache(k_rot, v_new, k_cache, v_cache, slot_mapping)
+        reshape_and_cache(k_rot, v_new, k_cache, v_cache, slot_mapping, k_min, k_max)
     else:
-        reshape_and_cache_fp8(k_rot, v_new, k_cache, v_cache, k_scale, v_scale, slot_mapping)
+        reshape_and_cache_fp8(k_rot, v_new, k_cache, v_cache, k_scale, v_scale, slot_mapping,
+                              k_min, k_max)
     return k_rot
