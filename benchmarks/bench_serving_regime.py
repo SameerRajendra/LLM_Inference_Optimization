@@ -47,8 +47,25 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sparse_kv._C import fused_gqa      # noqa: E402
 from bench_common import save_result    # noqa: E402
+
+try:
+    import sparse_kv._C as _C
+except ImportError:
+    _C = None
+
+try:
+    from triton_kernels.gqa_decode import (
+        KV_PAGE_TOKENS,
+        gqa_decode as triton_gqa_decode,
+        quantize_kv_fp8 as triton_quantize_kv_fp8,
+    )
+    HAS_TRITON = True
+except ImportError:
+    KV_PAGE_TOKENS = 64
+    triton_gqa_decode = None
+    triton_quantize_kv_fp8 = None
+    HAS_TRITON = False
 
 # ---- Llama-3.1-8B ------------------------------------------------------------
 HQ, HKV, D = 32, 8, 128
@@ -57,6 +74,51 @@ WEIGHT_GB = 16.0            # 8B params @ fp16
 HBM_TBS = 3.35              # H100 SXM HBM3 peak
 HBM_GB = 80.0
 RESERVE_GB = 4.0            # activations, workspace, fragmentation
+
+
+def resolve_kernel(choice):
+    if choice == "auto":
+        if HAS_TRITON:
+            return "triton_fp8"
+        if _C is not None and hasattr(_C, "fused_gqa_v4_fp8"):
+            return "v4_fp8"
+        if _C is not None and hasattr(_C, "fused_gqa_v4"):
+            return "v4"
+        if _C is not None and hasattr(_C, "fused_gqa"):
+            return "v3"
+        raise RuntimeError("No CUDA extension (_C) or Triton kernel available")
+
+    if choice.startswith("triton") and not HAS_TRITON:
+        raise RuntimeError("Requested kernel '{}' but Triton is unavailable".format(choice))
+    if choice in ("v3", "v4", "v4_fp8"):
+        fn_map = {"v3": "fused_gqa", "v4": "fused_gqa_v4", "v4_fp8": "fused_gqa_v4_fp8"}
+        if _C is None or not hasattr(_C, fn_map[choice]):
+            raise RuntimeError("Requested kernel '{}' requires built sparse_kv._C".format(choice))
+    return choice
+
+
+def build_kernel_fn(kernel_name, Q, Kc, Vc, scale):
+    is_fp8 = kernel_name.endswith("_fp8")
+    if not is_fp8:
+        if kernel_name == "v3":
+            return (lambda: _C.fused_gqa(Q, Kc, Vc, scale)), 2, 0
+        if kernel_name == "v4":
+            return (lambda: _C.fused_gqa_v4(Q, Kc, Vc, scale)), 2, 0
+        if kernel_name == "triton_fp16":
+            return (lambda: triton_gqa_decode(Q, Kc, Vc, scale=scale)), 2, 0
+        raise ValueError("Unknown kernel: " + kernel_name)
+
+    if _C is not None and hasattr(_C, "quantize_kv_fp8"):
+        Kq, Vq, ks, vs = _C.quantize_kv_fp8(Kc, Vc)
+    else:
+        Kq, Vq, ks, vs = triton_quantize_kv_fp8(Kc, Vc)
+
+    scale_bytes = ks.numel() * ks.element_size() + vs.numel() * vs.element_size()
+    if kernel_name == "v4_fp8":
+        return (lambda: _C.fused_gqa_v4_fp8(Q, Kq, Vq, ks, vs, scale)), 1, scale_bytes
+    if kernel_name == "triton_fp8":
+        return (lambda: triton_gqa_decode(Q, Kq, Vq, scale=scale, k_scale=ks, v_scale=vs)), 1, scale_bytes
+    raise ValueError("Unknown kernel: " + kernel_name)
 
 
 def timed(fn, warmup=10, iters=50):
@@ -83,15 +145,16 @@ def max_concurrent(ctx, dtype_bytes=2):
     return int(pool // (ctx * kv_bytes_per_token(dtype_bytes)))
 
 
-def run_config(B, N, scale, do_sdpa=True):
+def run_config(B, N, scale, kernel_name, do_sdpa=True):
     dev = "cuda"
     Q = torch.randn(B, HQ, D, device=dev, dtype=torch.float16)
     Kc = torch.randn(B, N, HKV, D, device=dev, dtype=torch.float16)
     Vc = torch.randn(B, N, HKV, D, device=dev, dtype=torch.float16)
 
-    row = {"batch": B, "ctx": N}
+    fn, kv_bytes, scale_bytes = build_kernel_fn(kernel_name, Q, Kc, Vc, scale)
+    row = {"batch": B, "ctx": N, "kernel": kernel_name}
 
-    ours_ms = timed(lambda: fused_gqa(Q, Kc, Vc, scale))
+    ours_ms = timed(fn)
     row["ours_ms"] = ours_ms
 
     if do_sdpa:
@@ -113,18 +176,19 @@ def run_config(B, N, scale, do_sdpa=True):
                 return F.scaled_dot_product_attention(Qs, Ke, Ve, scale=scale)
 
         o_ref = sdpa_fn().squeeze(2)
-        o_ours = fused_gqa(Q, Kc, Vc, scale)
+        o_ours = fn()
         row["max_err"] = (o_ours.float() - o_ref.float()).abs().max().item()
         row["sdpa_ms"] = timed(sdpa_fn)
         del Qs, Ks, Vs, o_ref, o_ours
 
     # Bytes this layer's attention must move for the whole batch.
-    layer_bytes = 2 * B * N * HKV * D * 2
+    layer_bytes = 2 * B * N * HKV * D * kv_bytes + scale_bytes
     row["layer_gb"] = layer_bytes / 1e9
     row["ours_gbps"] = layer_bytes / (ours_ms * 1e-3) / 1e9
     row["ours_pct_hbm"] = row["ours_gbps"] / (HBM_TBS * 1000.0) * 100.0
     if "sdpa_ms" in row:
-        sdpa_gbps = layer_bytes / (row["sdpa_ms"] * 1e-3) / 1e9
+        sdpa_bytes = 2 * B * N * HKV * D * 2
+        sdpa_gbps = sdpa_bytes / (row["sdpa_ms"] * 1e-3) / 1e9
         row["sdpa_pct_hbm"] = sdpa_gbps / (HBM_TBS * 1000.0) * 100.0
 
     # --- projected full decode step (MODEL, not measured) ---
@@ -141,9 +205,10 @@ def run_config(B, N, scale, do_sdpa=True):
     return row
 
 
-def fits(B, N, headroom=0.75):
-    """Skip configs whose tensors would not fit (ours + SDPA copies)."""
-    need = 2 * (2 * B * N * HKV * D * 2)      # our layout + SDPA transposed copy
+def fits(B, N, kv_bytes=2, do_sdpa=True, headroom=0.75):
+    """Skip configs whose tensors would not fit (ours + optional SDPA copies)."""
+    fp16_kv = 2 * B * N * HKV * D * 2
+    need = fp16_kv * (2 if do_sdpa else 1) + (2 * B * N * HKV * D if kv_bytes == 1 else 0)
     free, _ = torch.cuda.mem_get_info()
     return need < free * headroom
 
@@ -152,6 +217,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batches", default="1,4,8,16,32")
     ap.add_argument("--contexts", default="4096,16384,64000")
+    ap.add_argument("--kernel", default="auto",
+                    choices=["auto", "v3", "v4", "v4_fp8", "triton_fp16", "triton_fp8"],
+                    help="decode kernel to benchmark (default: auto -> triton_fp8 or best built)")
     ap.add_argument("--json", default="",
                     help="extra copy at an explicit path (results/ is always written)")
     ap.add_argument("--label", default="",
@@ -159,6 +227,8 @@ def main():
     ap.add_argument("--no-sdpa", action="store_true")
     args = ap.parse_args()
 
+    kernel_name = resolve_kernel(args.kernel)
+    kv_bytes = 1 if kernel_name.endswith("_fp8") else 2
     batches = [int(x) for x in args.batches.split(",")]
     contexts = [int(x) for x in args.contexts.split(",")]
     scale = 1.0 / (D ** 0.5)
@@ -175,8 +245,8 @@ def main():
             N, kv_seq, max_concurrent(N, 2), max_concurrent(N, 1)))
     print()
 
-    print("Decode attention, measured per layer for the whole batch "
-          "(proj = modelled full step)")
+    print("Decode attention [{}], measured per layer for the whole batch "
+          "(proj = modelled full step)".format(kernel_name))
     hdr = ("{:>6} {:>8} {:>10} {:>10} {:>9} {:>8} {:>8} {:>11} {:>11} {:>9}")
     print(hdr.format("batch", "ctx", "ours(ms)", "SDPA(ms)", "ratio",
                      "GB/layer", "%HBM", "step_ms*", "tok/s*", "max_err"))
@@ -185,10 +255,10 @@ def main():
     rows = []
     for N in contexts:
         for B in batches:
-            if not fits(B, N):
+            if not fits(B, N, kv_bytes=kv_bytes, do_sdpa=not args.no_sdpa):
                 print("{:>6} {:>8}   skipped - would not fit in free HBM".format(B, N))
                 continue
-            r = run_config(B, N, scale, do_sdpa=not args.no_sdpa)
+            r = run_config(B, N, scale, kernel_name, do_sdpa=not args.no_sdpa)
             rows.append(r)
             ratio = (r["ours_ms"] / r["sdpa_ms"]) if "sdpa_ms" in r else float("nan")
             print(hdr.format(
@@ -207,14 +277,15 @@ def main():
               N_LAYERS, WEIGHT_GB / (HBM_TBS * 1000.0) * 1000.0))
     print("ratio < 1.0 = our kernel is faster than SDPA/FlashAttention.")
 
-    cfg = {"hq": HQ, "hkv": HKV, "d": D, "n_layers": N_LAYERS,
+    cfg = {"kernel": kernel_name, "kv_bytes_per_elem": kv_bytes,
+           "hq": HQ, "hkv": HKV, "d": D, "n_layers": N_LAYERS,
            "weight_gb": WEIGHT_GB, "hbm_tbs": HBM_TBS,
            "hbm_gb": HBM_GB, "reserve_gb": RESERVE_GB,
            "capacity": {str(N): {"kv_gb_per_seq": N * kv_bytes_per_token() / 1e9,
                                  "max_seqs_fp16": max_concurrent(N, 2),
                                  "max_seqs_fp8": max_concurrent(N, 1)}
                         for N in contexts}}
-    save_result("serving_regime", rows, label=args.label, extra=cfg)
+    save_result("serving_regime", rows, label=args.label or kernel_name, extra=cfg)
 
     if args.json:
         os.makedirs(os.path.dirname(args.json) or ".", exist_ok=True)

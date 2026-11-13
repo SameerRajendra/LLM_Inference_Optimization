@@ -96,9 +96,10 @@ def serving_table(runs):
             out.append("| {} | {:.2f} GB | {} | {} |".format(
                 ctx, c["kv_gb_per_seq"], c["max_seqs_fp16"], c["max_seqs_fp8"]))
 
-    out += ["", "Decode attention measured per layer for the whole batch "
+    kernel_name = cfg.get("kernel", "v3 (legacy)")
+    out += ["", "Decode attention (`{}`) measured per layer for the whole batch "
             "(`step_ms`/`tok/s` are modelled: attention x layers + weight read "
-            "at peak bandwidth, so they are an upper bound):", "",
+            "at peak bandwidth, so they are an upper bound):".format(kernel_name), "",
             "| batch | ctx | ours (ms) | SDPA (ms) | GB/layer | % HBM | step ms* | tok/s* |",
             "|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for row in latest.get("rows", []):

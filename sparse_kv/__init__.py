@@ -2,12 +2,13 @@
 __version__ = "0.1.0"
 
 from .attention import sparse_attention
+from .eviction import fused_kv_evict
 
 try:
-    from .eviction import fused_kv_evict
     from sparse_kv._C import kv_evict_quant_forward
     CUDA_AVAILABLE = True
 except (ImportError, ModuleNotFoundError) as e:
+    kv_evict_quant_forward = None
     CUDA_AVAILABLE = False
     import sys
     import warnings
@@ -15,4 +16,4 @@ except (ImportError, ModuleNotFoundError) as e:
                   f"Rebuild for this interpreter ({sys.executable}): "
                   f"{sys.executable} setup.py build_ext --inplace")
 
-__all__ = ["sparse_attention", "fused_kv_evict", "kv_evict_quant_forward"]
+__all__ = ["sparse_attention", "fused_kv_evict", "kv_evict_quant_forward", "CUDA_AVAILABLE"]

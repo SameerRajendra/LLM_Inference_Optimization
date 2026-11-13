@@ -58,7 +58,7 @@ Concurrent sequences that fit on one 80.0 GB GPU (16.0 GB weights, 4.0 GB reserv
 | 16384 | 2.15 GB | 27 | 55 |
 | 64000 | 8.39 GB | 7 | 14 |
 
-Decode attention measured per layer for the whole batch (`step_ms`/`tok/s` are modelled: attention x layers + weight read at peak bandwidth, so they are an upper bound):
+Decode attention (`v3 (legacy)`) measured per layer for the whole batch (`step_ms`/`tok/s` are modelled: attention x layers + weight read at peak bandwidth, so they are an upper bound):
 
 | batch | ctx | ours (ms) | SDPA (ms) | GB/layer | % HBM | step ms* | tok/s* |
 |---:|---:|---:|---:|---:|---:|---:|---:|

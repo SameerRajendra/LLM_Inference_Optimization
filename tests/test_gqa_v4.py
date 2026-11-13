@@ -9,13 +9,16 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-import sparse_kv._C as _C
+try:
+    import sparse_kv._C as _C
+except ImportError:
+    _C = None
 
 HQ, HKV, D = 32, 8, 128
 SCALE = 1.0 / (D ** 0.5)
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available() or not hasattr(_C, "fused_gqa_v4"),
+    not torch.cuda.is_available() or _C is None or not hasattr(_C, "fused_gqa_v4"),
     reason="needs CUDA and a build containing fused_gqa_v4")
 
 

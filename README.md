@@ -193,9 +193,10 @@ python setup.py build_ext --inplace       # builds sparse_kv._C in place
 ```
 
 ```bash
-pytest tests/ -v
+pytest tests/ -v                                # full GPU + CUDA extension suite
+TRITON_INTERPRET=1 pytest tests/ -v             # CPU-only (Triton interpreter + unit tests)
 python benchmarks/profile_kernel_vs_sdpa.py --kernel v4
-python benchmarks/bench_serving_regime.py
+python benchmarks/bench_serving_regime.py --kernel triton_fp8
 ```
 
 On a Slurm cluster see [`cluster/CLUSTER.md`](cluster/CLUSTER.md).
