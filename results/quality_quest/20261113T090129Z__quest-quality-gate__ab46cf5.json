@@ -1,0 +1,158 @@
+{
+  "benchmark": "quality_quest",
+  "label": "quest-quality-gate",
+  "provenance": {
+    "utc": "2026-11-13T09:01:29Z",
+    "git_sha": "ab46cf5",
+    "git_branch": "decode-engine",
+    "git_subject": "",
+    "git_dirty": null,
+    "git_available": false,
+    "host": "modal",
+    "python": "3.11.5",
+    "torch": "2.8.0+cu128",
+    "cuda": "12.8",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "sm": "sm_90",
+    "hbm_gb": 85.0
+  },
+  "rows": [
+    {
+      "argmax_parity": 1.0,
+      "parity_confident_steps": 1.0,
+      "top5_hit": 1.0,
+      "kl_ref_test": 1.0968182323267683e-05,
+      "ppl_ref": 29.833531595625086,
+      "ppl": 29.82887303070575,
+      "ppl_delta_pct": -0.015615197632245836,
+      "ref_top1_confidence": 0.4856887757778168,
+      "path": "paged",
+      "budget": null,
+      "verdict": "PASS",
+      "needles": [
+        {
+          "depth": 0.1,
+          "found": true,
+          "answer": "60494.\nThe"
+        },
+        {
+          "depth": 0.5,
+          "found": true,
+          "answer": "65125.\nThe"
+        },
+        {
+          "depth": 0.9,
+          "found": true,
+          "answer": "15306.\nThe"
+        }
+      ],
+      "needle_ok": true,
+      "needle_found": 3,
+      "needle_ref_found": 3,
+      "intercepted": 2176,
+      "dense_prefix_calls": 128,
+      "passed_through": 36
+    },
+    {
+      "argmax_parity": 0.84375,
+      "parity_confident_steps": 1.0,
+      "top5_hit": 1.0,
+      "kl_ref_test": 0.07792046666145325,
+      "ppl_ref": 29.833531595625086,
+      "ppl": 32.119133260506686,
+      "ppl_delta_pct": 7.661183717239733,
+      "ref_top1_confidence": 0.4856887757778168,
+      "path": "quest@0.125",
+      "budget": 0.125,
+      "verdict": "FAIL",
+      "needles": [
+        {
+          "depth": 0.1,
+          "found": true,
+          "answer": "60494. The"
+        },
+        {
+          "depth": 0.5,
+          "found": true,
+          "answer": "65125.\nThe"
+        },
+        {
+          "depth": 0.9,
+          "found": true,
+          "answer": "15306.\nThe"
+        }
+      ],
+      "needle_ok": true,
+      "needle_found": 3,
+      "needle_ref_found": 3,
+      "intercepted": 2176,
+      "dense_prefix_calls": 128,
+      "passed_through": 36
+    },
+    {
+      "argmax_parity": 0.859375,
+      "parity_confident_steps": 1.0,
+      "top5_hit": 1.0,
+      "kl_ref_test": 0.028247779235243797,
+      "ppl_ref": 29.833531595625086,
+      "ppl": 29.890595739631546,
+      "ppl_delta_pct": 0.1912751892063247,
+      "ref_top1_confidence": 0.4856887757778168,
+      "path": "quest@0.25",
+      "budget": 0.25,
+      "verdict": "PASS",
+      "needles": [
+        {
+          "depth": 0.1,
+          "found": true,
+          "answer": "60494.\nThe"
+        },
+        {
+          "depth": 0.5,
+          "found": true,
+          "answer": "65125.\nThe"
+        },
+        {
+          "depth": 0.9,
+          "found": true,
+          "answer": "15306.\nThe"
+        }
+      ],
+      "needle_ok": true,
+      "needle_found": 3,
+      "needle_ref_found": 3,
+      "intercepted": 2176,
+      "dense_prefix_calls": 128,
+      "passed_through": 36
+    }
+  ],
+  "extra": {
+    "model": "Qwen/Qwen3-8B",
+    "prefill": 4096,
+    "steps": 64,
+    "dense_prefix_layers": 2,
+    "block_size": 16,
+    "kv": "fp16",
+    "recent_pages": 1,
+    "needle_context": 8192,
+    "reference_needles": [
+      {
+        "depth": 0.1,
+        "found": true,
+        "answer": "60494.\nThe"
+      },
+      {
+        "depth": 0.5,
+        "found": true,
+        "answer": "65125.\nThe"
+      },
+      {
+        "depth": 0.9,
+        "found": true,
+        "answer": "15306.\nThe"
+      }
+    ],
+    "protocol": "teacher-forced replay of real text; prefill exact and shared; decode attention of layers >= dense_prefix_layers via incrementally appended paged pool; budget = fraction of current context pages"
+  },
+  "NOTE": "no git binary on this node - SHA read from .git, but working-tree cleanliness was not verified"
+}

@@ -1,0 +1,165 @@
+{
+  "model": "meta-llama/Llama-3.1-8B",
+  "top_k": 32,
+  "block_size": 64,
+  "top_k_blocks": 8,
+  "timestamp": "20260704_001051",
+  "results": [
+    {
+      "ctx_len": 4096,
+      "mode": "dense",
+      "tokens_attended": null,
+      "latency_ms": 14.536,
+      "speedup": 1.0,
+      "mean_abs_logit_diff": 0.0,
+      "max_abs_logit_diff": 0.0,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "v3-gqa-dense",
+      "tokens_attended": null,
+      "latency_ms": 17.146,
+      "speedup": 0.848,
+      "mean_abs_logit_diff": 0.000488,
+      "max_abs_logit_diff": 0.000488,
+      "argmax_match": 1.0,
+      "raw_kernel_ms": 0.0765,
+      "latency_basis": "full_model_decode_v3_patched"
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "token-sparse",
+      "tokens_attended": 32,
+      "latency_ms": 25.28,
+      "speedup": 0.575,
+      "mean_abs_logit_diff": 1.354406,
+      "max_abs_logit_diff": 7.195312,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "block-sparse",
+      "tokens_attended": 512,
+      "latency_ms": 55.274,
+      "speedup": 0.263,
+      "mean_abs_logit_diff": 1.965389,
+      "max_abs_logit_diff": 19.179688,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 4096,
+      "mode": "hybrid-16",
+      "tokens_attended": 32,
+      "latency_ms": 19.923,
+      "speedup": 0.73,
+      "mean_abs_logit_diff": 0.320219,
+      "max_abs_logit_diff": 1.636719,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "dense",
+      "tokens_attended": null,
+      "latency_ms": 25.612,
+      "speedup": 1.0,
+      "mean_abs_logit_diff": 0.0,
+      "max_abs_logit_diff": 0.0,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "v3-gqa-dense",
+      "tokens_attended": null,
+      "latency_ms": 38.269,
+      "speedup": 0.669,
+      "mean_abs_logit_diff": 0.000977,
+      "max_abs_logit_diff": 0.000977,
+      "argmax_match": 1.0,
+      "raw_kernel_ms": 0.412,
+      "latency_basis": "full_model_decode_v3_patched"
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "token-sparse",
+      "tokens_attended": 32,
+      "latency_ms": 49.663,
+      "speedup": 0.516,
+      "mean_abs_logit_diff": 1.254644,
+      "max_abs_logit_diff": 8.367188,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "block-sparse",
+      "tokens_attended": 512,
+      "latency_ms": 165.086,
+      "speedup": 0.155,
+      "mean_abs_logit_diff": 1.801895,
+      "max_abs_logit_diff": 15.570312,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 16384,
+      "mode": "hybrid-16",
+      "tokens_attended": 32,
+      "latency_ms": 37.622,
+      "speedup": 0.681,
+      "mean_abs_logit_diff": 0.692232,
+      "max_abs_logit_diff": 2.421875,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "dense",
+      "tokens_attended": null,
+      "latency_ms": 70.968,
+      "speedup": 1.0,
+      "mean_abs_logit_diff": 0.0,
+      "max_abs_logit_diff": 0.0,
+      "argmax_match": 1.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "v3-gqa-dense",
+      "tokens_attended": null,
+      "latency_ms": 115.399,
+      "speedup": 0.615,
+      "mean_abs_logit_diff": 0.000977,
+      "max_abs_logit_diff": 0.000977,
+      "argmax_match": 1.0,
+      "raw_kernel_ms": 1.372,
+      "latency_basis": "full_model_decode_v3_patched"
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "token-sparse",
+      "tokens_attended": 32,
+      "latency_ms": 146.316,
+      "speedup": 0.485,
+      "mean_abs_logit_diff": 0.872082,
+      "max_abs_logit_diff": 9.693359,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "block-sparse",
+      "tokens_attended": 512,
+      "latency_ms": 596.612,
+      "speedup": 0.119,
+      "mean_abs_logit_diff": 1.911113,
+      "max_abs_logit_diff": 15.698242,
+      "argmax_match": 0.0
+    },
+    {
+      "ctx_len": 64000,
+      "mode": "hybrid-16",
+      "tokens_attended": 32,
+      "latency_ms": 108.455,
+      "speedup": 0.654,
+      "mean_abs_logit_diff": 0.208651,
+      "max_abs_logit_diff": 1.365234,
+      "argmax_match": 1.0
+    }
+  ]
+}
