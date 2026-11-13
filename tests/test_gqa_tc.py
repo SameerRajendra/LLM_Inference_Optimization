@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 try:
     import sparse_kv._C as _C
+    from sparse_kv import ops as _ops  # noqa: F401  registers torch.ops.sparse_kv.*
 except ImportError:
     _C = None
 
