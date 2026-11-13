@@ -246,13 +246,11 @@ __global__ void __launch_bounds__(TC_THREADS, 2) gqa_decode_tc_kernel(
     }
     __syncthreads();
 
-    // In FP16 mode (153 regs) keep all of Q in registers across tiles; in FP8 mode stream one
-    // 16x16 Q tile (4 regs) per k-step from tile_Q so total regs stay <=168 (3+ blocks/SM).
-    const int q_mat  = lane >> 3;           // 0..3
-    const int m_ld   = ((q_mat & 1) << 3) + (lane & 7);
-    const int kh_off = (q_mat >> 1);        // 0 or 1
-    [[maybe_unused]] uint32_t q_frag[FP8 ? 1 : NUM_K_STEPS][4];
-    if constexpr (!FP8) {
+    uint32_t q_frag[NUM_K_STEPS][4];
+    {
+        const int q_mat  = lane >> 3;           // 0..3
+        const int m_ld   = ((q_mat & 1) << 3) + (lane & 7);
+        const int kh_off = (q_mat >> 1);        // 0 or 1
         #pragma unroll
         for (int ks = 0; ks < NUM_K_STEPS; ks++) {
             const int c8      = 2 * ks + kh_off;
@@ -359,13 +357,8 @@ __global__ void __launch_bounds__(TC_THREADS, 2) gqa_decode_tc_kernel(
             const int tok1 = tok0 + 8;
             const int d_off0 = 2 * tid_in_group;
             const int d_off1 = d_off0 + 8;
-            #pragma unroll 2
+            #pragma unroll
             for (int ks = 0; ks < NUM_K_STEPS; ks++) {
-                const int c8      = 2 * ks + kh_off;
-                const int c8_swiz = c8 ^ (m_ld & Q_SWIZ_MASK);
-                uint32_t q0, q1, q2, q3;
-                ldmatrix_x4(q0, q1, q2, q3,
-                            tile_Q + m_ld * HEAD_DIM + c8_swiz * 8);
                 const int sw0 = (ks ^ (tok0 & SWIZ_MASK)) * 16;
                 const int sw1 = (ks ^ (tok1 & SWIZ_MASK)) * 16;
                 const uint16_t raw_b0_n0 = *reinterpret_cast<const uint16_t*>(
@@ -377,10 +370,10 @@ __global__ void __launch_bounds__(TC_THREADS, 2) gqa_decode_tc_kernel(
                 const uint16_t raw_b1_n1 = *reinterpret_cast<const uint16_t*>(
                     k_tile + tok1 * HEAD_DIM + sw1 + d_off1);
                 mma_m16n8k16(s0, s1, s2, s3,
-                             q0, q1, q2, q3,
+                             q_frag[ks][0], q_frag[ks][1], q_frag[ks][2], q_frag[ks][3],
                              fp8x2_to_u32_f16x2(raw_b0_n0), fp8x2_to_u32_f16x2(raw_b1_n0));
                 mma_m16n8k16(s4, s5, s6, s7,
-                             q0, q1, q2, q3,
+                             q_frag[ks][0], q_frag[ks][1], q_frag[ks][2], q_frag[ks][3],
                              fp8x2_to_u32_f16x2(raw_b0_n1), fp8x2_to_u32_f16x2(raw_b1_n1));
             }
         }
@@ -480,39 +473,32 @@ __global__ void __launch_bounds__(TC_THREADS, 2) gqa_decode_tc_kernel(
                              a0, a1, a2, a3, b0_1, b1_1);
             }
         } else {
-            const int tok0    = warp_tok_base + 2 * tid_in_group;
-            const int tok1    = tok0 + 1;
-            const int tok0_sw = tok0 & SWIZ_MASK;
-            const int tok1_sw = tok1 & SWIZ_MASK;
-            const uint8_t* v_row0 = v_tile + tok0 * HEAD_DIM + group_id;
-            const uint8_t* v_row1 = v_tile + tok1 * HEAD_DIM + group_id;
-            const uint8_t* v_row8 = v_row0 + 8 * HEAD_DIM;
-            const uint8_t* v_row9 = v_row1 + 8 * HEAD_DIM;
+            const int tok0 = warp_tok_base + 2 * tid_in_group;
+            const int tok1 = tok0 + 1;
+            const int tok8 = tok0 + 8;
+            const int tok9 = tok0 + 9;
             #pragma unroll
-            for (int np = 0; np < NUM_N8_TILES / 2; np++) {
-                const int sw0 = (np ^ tok0_sw) * 16;
-                const int sw1 = (np ^ tok1_sw) * 16;
+            for (int nt = 0; nt < NUM_N8_TILES; nt++) {
+                const int c16   = nt >> 1;
+                const int d_in  = ((nt & 1) << 3) + group_id;
+                const int sw0   = (c16 ^ (tok0 & SWIZ_MASK)) * 16 + d_in;
+                const int sw1   = (c16 ^ (tok1 & SWIZ_MASK)) * 16 + d_in;
+                const uint16_t raw0 =
+                    static_cast<uint16_t>(v_tile[tok0 * HEAD_DIM + sw0]) |
+                    (static_cast<uint16_t>(v_tile[tok1 * HEAD_DIM + sw1]) << 8);
+                // (tok0 + 8) & SWIZ_MASK == tok0 & SWIZ_MASK since SWIZ_MASK <= 7.
+                const uint16_t raw1 =
+                    static_cast<uint16_t>(v_tile[tok8 * HEAD_DIM + sw0]) |
+                    (static_cast<uint16_t>(v_tile[tok9 * HEAD_DIM + sw1]) << 8);
 
-                #pragma unroll
-                for (int half_n = 0; half_n < 2; half_n++) {
-                    const int d0 = sw0 + half_n * 8;
-                    const int d1 = sw1 + half_n * 8;
-                    const uint16_t raw0 =
-                        static_cast<uint16_t>(v_row0[d0]) |
-                        (static_cast<uint16_t>(v_row1[d1]) << 8);
-                    const uint16_t raw1 =
-                        static_cast<uint16_t>(v_row8[d0]) |
-                        (static_cast<uint16_t>(v_row9[d1]) << 8);
-                    float tmp0 = 0.f, tmp1 = 0.f, tmp2 = 0.f, tmp3 = 0.f;
-                    mma_m16n8k16(tmp0, tmp1, tmp2, tmp3,
-                                 a0, a1, a2, a3,
-                                 fp8x2_to_u32_f16x2(raw0), fp8x2_to_u32_f16x2(raw1));
-                    const int nt = 2 * np + half_n;
-                    o_acc[nt][0] += vs_val * tmp0;
-                    o_acc[nt][1] += vs_val * tmp1;
-                    o_acc[nt][2] += vs_val * tmp2;
-                    o_acc[nt][3] += vs_val * tmp3;
-                }
+                float tmp0 = 0.f, tmp1 = 0.f, tmp2 = 0.f, tmp3 = 0.f;
+                mma_m16n8k16(tmp0, tmp1, tmp2, tmp3,
+                             a0, a1, a2, a3,
+                             fp8x2_to_u32_f16x2(raw0), fp8x2_to_u32_f16x2(raw1));
+                o_acc[nt][0] += vs_val * tmp0;
+                o_acc[nt][1] += vs_val * tmp1;
+                o_acc[nt][2] += vs_val * tmp2;
+                o_acc[nt][3] += vs_val * tmp3;
             }
         }
 
@@ -659,11 +645,14 @@ int choose_tc_splits(int sm_count, int blocks_per_sm, int Hkv, int num_m_tiles, 
 {
     const int SPLIT_TOKENS = 512;
     const int MAX_SPLITS   = 512;
+    const int TARGET_WAVES = 4;
     const int blocks_per_split = std::max(1, Hkv * num_m_tiles * B);
     const int capacity  = std::max(1, sm_count * blocks_per_sm);
     const int per_wave  = std::max(1, capacity / blocks_per_split);
     const int want      = (N + SPLIT_TOKENS - 1) / SPLIT_TOKENS;
-    const int waves     = std::max(1, (want + per_wave / 2) / per_wave);
+    const int max_occ_splits = std::max(1, (TARGET_WAVES * capacity + blocks_per_split - 1) / blocks_per_split);
+    const int capped_want = std::min(want, max_occ_splits);
+    const int waves     = std::max(1, (capped_want + per_wave / 2) / per_wave);
     const int split_cap = std::max(1, N / TC_BLOCK_N);
 
     int num_splits = std::min(waves * per_wave, split_cap);
