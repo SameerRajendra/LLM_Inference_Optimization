@@ -63,7 +63,7 @@ python benchmarks/bench_triton_decode.py --peak-gbs <GB/s>
 python benchmarks/profile_ncu.py --ncu --ctx 32768
 
 # H100 on Modal
-modal run modal_apps/bench_triton_h100.py
+modal run modal_apps/h100.py --suite kernel
 ```
 
 The benchmark times each call with a cold L2 and reports effective bandwidth as

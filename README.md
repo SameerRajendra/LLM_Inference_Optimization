@@ -90,7 +90,7 @@ Nsight Compute on the laptop shows about 4× fewer issued instructions, with the
 pipe. FP8 on H100 is now limited by FP8-to-fp16 conversion; FP8 MMA is the next lever. Method: cold L2,
 launch overhead hidden with `torch.cuda._sleep`, median of 100 calls. Results and the exact per-shape tables
 are in `results/triton/<gpu>/decode.md`; tests in `tests/test_triton_decode.py` (63 cases); benchmark
-`benchmarks/bench_triton_decode.py`; H100 run `modal_apps/bench_triton_h100.py`.
+`benchmarks/bench_triton_decode.py`; H100 run `modal_apps/h100.py --suite kernel`.
 
 ## How it got there
 
