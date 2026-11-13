@@ -22,7 +22,7 @@ This project tackles the decode bottleneck across three levers:
 
 ## Key Measured Results (NVIDIA H100 80GB HBM3, `sm_90a`)
 
-Full provenance-stamped tables auto-generated from `results/` live in [`RESULTS.md`](RESULTS.md).
+Full provenance-stamped tables auto-generated from `results/` live in [`RESULTS.md`](RESULTS.md), and the visual technical report (with inline charts, `nsys`/SASS attribution, and documented negative results) is in [`docs/H100_Decode_Engine_Report.pdf`](docs/H100_Decode_Engine_Report.pdf).
 
 ### 1. Decode Kernel vs. SDPA & FlashInfer
 - **Kernel suite (`B=1,4`, `ctx=4K..64K`):** Triton FP16 hits **`2,903 GB/s` (86.6% HBM peak)** at `B=4, 64K`; CUDA Tensor-Core (`gqa_decode_tc.cu` with `HMMA` + `cp.async` `LDGSTS`, verified via `cuobjdump -sass` in [`results/profiles/h100_sass.md`](results/profiles/h100_sass.md)) cuts `cuda_v4` latency by up to 28–38% on FP8/FP16 (`0.2639 ms` vs `0.4228 ms` at `B=4, 64K` FP8).
@@ -52,6 +52,14 @@ Full provenance-stamped tables auto-generated from `results/` live in [`RESULTS.
   - `TP=2`: eager `0.781 ms` → graph **`0.166 ms`** (**4.71×**) at `B=1, 4K` FP16; `B=64, 16K` FP8 hits **`0.680 ms`** (`25%` faster than FP16 `0.907 ms`).
   - `TP=4`: eager `0.838 ms` → graph **`0.130 ms`** (**6.45×**, up to **7.55×** on FP8 `B=1, 4K`); `B=64, 16K` FP8 hits **`0.461 ms`**.
 - **H100 `nsys` breakdown ([`results/profiles/h100_nsys_profile.md`](results/profiles/h100_nsys_profile.md)):** Eager `Decode_Step` spends `43.3–44.0%` in `RoPE_KV_Append` and `23.9–24.8%` in `RMSNorm`, while `cuda_gpu_kern_sum` ([`results/profiles/h100_nsys_kern_sum.txt`](results/profiles/h100_nsys_kern_sum.txt)) shows GPU durations of `1.1–3.7 us` per launch — quantifying why CUDA Graphs eliminate the CPU dispatch wall, and identifying fused `RMSNorm + RoPE + KV Store` as the remaining ~22% gap vs. vLLM.
+
+### 5. Documented Bottlenecks & Negative Results
+
+- **Stage 1 shared-memory bank-conflict fix bought 0%** (`1.3538 -> 1.3792 ms` at 64K): kernel was latency/4×-redundant-fetch bound until KV-head block grouping (`Stage 2`, **8.0×**).
+- **Stage 4a 2× occupancy regressed both FP8 & FP16** (`0.1251 -> 0.1372 ms`): scalar CUDA was instruction-issue bound (~1,700 ops/lane), solved by Tensor Cores (`gqa_decode_tc.cu` + Triton `tl.dot`).
+- **`torch.compile` (`sdpa_compile`) collapsed at batch/long-context** (`467.98 ms` at `B=64, 4K`) due to dynamic KV shapes, whereas `torch.library.custom_op` + static CUDA Graphs scale to `2,968.5 tok/s`.
+- **`Quest@12.5%` passed `3/3` needle recall yet failed PPL (`+7.66%`)**: exposed a sharpness cliff vs. `25%` (`+0.19%` PPL).
+- **Eager `nsys` dispatch wall (68% host overhead)** + **unfused graph (~22% gap vs. vLLM)** + **FP8 crossover** (slower at `B=1, 4K` `11.53 vs 10.68 ms`, `+16%` faster at `B=64, 4K`; `agree=2` tie divergence on repeated `4K` synthetic prompt).
 
 ---
 
