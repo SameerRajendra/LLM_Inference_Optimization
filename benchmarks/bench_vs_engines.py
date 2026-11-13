@@ -3,8 +3,9 @@
 Engines (each optional; a missing package skips its rows instead of failing the run):
   sparse_kv   our engine (bench_e2e_serving.py): paged fp16 / fp8 KV, whole decode step in one
               CUDA graph. Metric: TPOT = mean per-step latency from CUDA events.
-  vllm        vllm.LLM with the same model, kv_cache_dtype auto (fp16) or fp8 (per-tensor scale),
-              CUDA graphs on, prefix caching off, random-token prompts of length ctx.
+  vllm        vllm.LLM with the same model, kv_cache_dtype auto (fp16 model) or fp8 (bf16 model,
+              required by Hopper FA3 FP8), CUDA graphs on, prefix caching off, random-token prompts
+              of length ctx.
               Metric: TPOT = (t(steps + 1 tokens) - t(1 token)) / steps, wall clock, fresh prompts
               each call. That includes vLLM's scheduler / sampler per step: an engine-level
               number, as is ours.
@@ -89,7 +90,8 @@ def run_vllm(args):
     max_len = max(args.contexts) + args.steps + 8
     overrides = {} if args.model == "tiny-random" else long_context_overrides(
         AutoConfig.from_pretrained(args.model), max_len)
-    kw = dict(model=args.model, dtype="float16", kv_cache_dtype=args.vllm_kv_dtype,
+    vllm_dtype = "bfloat16" if args.vllm_kv_dtype == "fp8" else "float16"
+    kw = dict(model=args.model, dtype=vllm_dtype, kv_cache_dtype=args.vllm_kv_dtype,
               max_model_len=max_len, max_num_seqs=max(args.batches),
               gpu_memory_utilization=args.vllm_gpu_util, enable_prefix_caching=False,
               seed=0)
@@ -121,14 +123,15 @@ def run_vllm(args):
             t1 = timed(B, ctx, 1)
             tn = timed(B, ctx, args.steps + 1)
             tpot = (tn - t1) / args.steps * 1e3
-            rows.append({"engine": "vllm", "method": method, "batch": B, "ctx": ctx,
-                         "steps": args.steps, "tpot_ms": tpot,
+            rows.append({"engine": "vllm", "method": method, "model_dtype": vllm_dtype,
+                         "batch": B, "ctx": ctx, "steps": args.steps, "tpot_ms": tpot,
                          "tok_s_from_tpot": B / tpot * 1e3, "t_1tok_s": t1, "t_ntok_s": tn,
                          "model": args.model})
-            print("{:>10} B={:<3} ctx={:<6} TPOT {:8.3f} ms  {:9.1f} tok/s".format(
-                method, B, ctx, tpot, B / tpot * 1e3))
+            print("{:>10} ({}) B={:<3} ctx={:<6} TPOT {:8.3f} ms  {:9.1f} tok/s".format(
+                method, vllm_dtype, B, ctx, tpot, B / tpot * 1e3))
     return rows, {"vllm_version": vllm.__version__, "vllm_rope_overrides": overrides,
-                  "vllm_gpu_memory_utilization": args.vllm_gpu_util}
+                  "vllm_gpu_memory_utilization": args.vllm_gpu_util,
+                  "vllm_model_dtype_" + args.vllm_kv_dtype: vllm_dtype}
 
 
 # --------------------------------------------------------------------------------- FlashInfer

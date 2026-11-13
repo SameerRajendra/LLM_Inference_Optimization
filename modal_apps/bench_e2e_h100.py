@@ -7,7 +7,7 @@ Smoke run first (one case per engine, a few minutes): checks that the image buil
 flashinfer-python pip resolves next to vllm==0.10.2 still has the plan()/run() API used by
 bench_vs_engines.py, before paying for the full sweep:
 
-    modal run modal_apps/bench_e2e_h100.py --batches 1 --vs-batches 1 --contexts 4096 --steps 4
+    modal run modal_apps/bench_e2e_h100.py --batches 1 --vs-batches 1 --contexts 4096 --steps 4 --no-save
 
 Steps (all in one container, ~1-2 h of H100 for the full sweep):
   1. build the CUDA extension for sm_90a
@@ -38,7 +38,7 @@ image = (
     .pip_install("vllm==0.10.2")
     .pip_install("flashinfer-python")
     .pip_install("numpy", "pytest", "ninja", "pybind11", "setuptools", "wheel", "packaging",
-                 "transformers>=4.51", "accelerate")
+                 "transformers==4.57.6", "accelerate")
     # Modal's add_python build was made with clang; build the extension with gcc.
     .env({"CC": "gcc", "CXX": "g++", "LDSHARED": "g++ -pthread -shared",
           "HF_HOME": "/cache/hf", "TOKENIZERS_PARALLELISM": "false"})
@@ -58,7 +58,8 @@ SECRETS = [modal.Secret.from_name("huggingface")] if os.environ.get("HF_SECRET")
 # memory: bench_e2e_serving keeps one ctx's prefill K/V in host RAM (~10 GB at 64K, Qwen3-8B).
 @app.function(image=image, gpu="H100", timeout=3 * 60 * 60, volumes={"/cache": hf_cache},
               secrets=SECRETS, memory=48 * 1024)
-def bench(model: str, batches: str, contexts: str, vs_batches: str, steps: int) -> dict:
+def bench(model: str, batches: str, contexts: str, vs_batches: str, steps: int,
+          no_save: bool = False) -> dict:
     start = time.time()
 
     def run(*cmd):
@@ -71,27 +72,30 @@ def bench(model: str, batches: str, contexts: str, vs_batches: str, steps: int) 
 
     run("nvidia-smi")
     run("python", "setup.py", "build_ext", "--inplace")
-    run("python", "-m", "pytest", "tests/test_cudagraph_compile.py", "-v")
+    run("python", "-m", "pytest", "tests/test_cudagraph_compile.py", "tests/test_gqa_tc.py", "-v")
     common = ["--model", model, "--contexts", contexts, "--steps", str(steps)]
-    run("python", "benchmarks/bench_e2e_serving.py", "--batches", batches, *common)
+    save_flag = ["--no-save"] if no_save else []
+    run("python", "benchmarks/bench_e2e_serving.py", "--batches", batches, *common, *save_flag)
     hf_cache.commit()  # keep the downloaded weights even if a later step fails
 
     e2e = new_results("e2e_serving")
     merge = ["--sparse-kv-results", str(e2e[-1])] if e2e else []
     run("python", "benchmarks/bench_vs_engines.py", "--engine", "vllm,flashinfer",
-        "--batches", vs_batches, *common, *merge)
+        "--batches", vs_batches, *common, *merge, *save_flag)
 
     out = {}
-    for path in Path("/app/results").rglob("*.json"):
-        if path.stat().st_mtime >= start:
-            out[str(path.relative_to("/app"))] = path.read_text()
+    if not no_save:
+        for path in Path("/app/results").rglob("*.json"):
+            if path.stat().st_mtime >= start:
+                out[str(path.relative_to("/app"))] = path.read_text()
     return out
 
 
 @app.local_entrypoint()
 def main(model: str = "Qwen/Qwen3-8B", batches: str = "1,4,8,16,32,64",
-         contexts: str = "4096,16384,65536", vs_batches: str = "1,4,8,16,32", steps: int = 64):
-    files = bench.remote(model, batches, contexts, vs_batches, steps)
+         contexts: str = "4096,16384,65536", vs_batches: str = "1,4,8,16,32", steps: int = 64,
+         no_save: bool = False):
+    files = bench.remote(model, batches, contexts, vs_batches, steps, no_save)
     for rel, text in files.items():
         dst = REPO_ROOT / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
