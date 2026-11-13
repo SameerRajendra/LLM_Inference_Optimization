@@ -13,7 +13,7 @@ install: venv
 	$(PIP) install -e . --no-build-isolation
 
 install-jax:
-	$(PIP) install -r requirements-jax.txt
+	$(PIP) install -r archive/requirements-jax.txt
 
 install-vllm:
 	$(PIP) install -r requirements-vllm.txt
