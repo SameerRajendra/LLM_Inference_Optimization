@@ -31,7 +31,7 @@ jobs:
       - name: Lint and syntax check
         run: |
           python -m py_compile sparse_kv/*.py triton_kernels/*.py benchmarks/*.py tests/*.py
-          ruff check sparse_kv triton_kernels benchmarks/bench_serving_regime.py benchmarks/make_report.py tests
+          ruff check sparse_kv triton_kernels benchmarks/bench_serving_regime.py benchmarks/make_report.py benchmarks/profile_ncu.py benchmarks/profile_e2e_nsys.py benchmarks/bench_tp_decode.py modal_apps/bench_e2e_h100.py tests
 
       - name: Run CPU and Triton-interpret test suite
         env:
