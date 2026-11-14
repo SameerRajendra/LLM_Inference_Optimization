@@ -630,15 +630,15 @@ def build_html(kernel_runs, triton_rows, e2e_runs, vs_runs, fp8_runs, quest_runs
     table {
       width: 100%;
       border-collapse: collapse;
-      margin: 4px 0 10px 0;
+      margin: 4px 0 9px 0;
       font-size: 8.0pt;
-      break-inside: auto;
+      break-inside: avoid;
     }
     thead { display: table-header-group; }
     tr { break-inside: avoid; }
     th, td {
       border-bottom: 1px solid #e2e8f0;
-      padding: 3.3px 6px;
+      padding: 2.8px 6px;
       text-align: left;
     }
     th {
