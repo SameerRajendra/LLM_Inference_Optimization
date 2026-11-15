@@ -370,7 +370,7 @@ def table_html(headers, rows, numeric_from=1):
     return "<table><thead><tr>" + th + "</tr></thead><tbody>" + "".join(trs) + "</tbody></table>"
 
 
-def build_html(kernel_runs, triton_rows, e2e_runs, vs_runs, fp8_runs, quest_runs, quest_q_runs, tp_runs):
+def build_html(kernel_runs, triton_rows, e2e_runs, vs_runs, fi_tc_runs, fp8_runs, quest_runs, quest_q_runs, tp_runs):
     # Extract exact metrics for KPIs and narrative
     best_triton_bw = max((float(r["gbps"]), float(r["pct_peak"])) for r in triton_rows) if triton_rows else (0.0, 0.0)
     e2e_rows = e2e_runs[-1].get("rows", []) if e2e_runs else []
@@ -435,15 +435,33 @@ def build_html(kernel_runs, triton_rows, e2e_runs, vs_runs, fp8_runs, quest_runs
 
     # vs_engines summary (FlashInfer + vLLM)
     vs_rows = vs_runs[-1].get("rows", []) if vs_runs else []
+    fi_tc_rows = fi_tc_runs[-1].get("rows", []) if fi_tc_runs else []
     fi_tbl_rows = []
-    for r in vs_rows:
-        if r.get("engine") == "flashinfer" and r.get("batch") in (1, 16, 32):
-            fi_tbl_rows.append([
-                r["method"], r["batch"], r["ctx"],
-                "{:.4f}".format(r["ours_ms"]),
-                "{:.4f}".format(r["flashinfer_ms"]),
-                "{:.3f}x".format(r["ours_over_flashinfer"]),
-            ])
+    if fi_tc_rows:
+        for ctx in (4096, 16384, 65536):
+            for b in (1, 4, 16, 32):
+                for dtype_lbl, m_def, m_tc in (("FP16", "kernel_fp16", "kernel_fp16_tc"), ("FP8", "kernel_fp8", "kernel_fp8_tc")):
+                    r_def = next((x for x in fi_tc_rows if x.get("method") == m_def and x.get("batch") == b and x.get("ctx") == ctx), None)
+                    r_tc = next((x for x in fi_tc_rows if x.get("method") == m_tc and x.get("batch") == b and x.get("ctx") == ctx), None)
+                    if r_def and r_tc:
+                        fi_tbl_rows.append([
+                            dtype_lbl, b, ctx,
+                            "{:.4f}".format(r_def["ours_ms"]),
+                            "{:.4f}".format(r_def["flashinfer_ms"]),
+                            "{:.2f}x".format(r_def["ours_over_flashinfer"]),
+                            "{:.4f}".format(r_tc["flashinfer_ms"]),
+                            "{:.2f}x".format(r_tc["ours_over_flashinfer"]),
+                        ])
+    else:
+        for r in vs_rows:
+            if r.get("engine") == "flashinfer" and r.get("batch") in (1, 16, 32):
+                fi_tbl_rows.append([
+                    r["method"], r["batch"], r["ctx"],
+                    "{:.4f}".format(r["ours_ms"]),
+                    "{:.4f}".format(r["flashinfer_ms"]),
+                    "{:.3f}x".format(r["ours_over_flashinfer"]),
+                    "-", "-",
+                ])
 
     vllm_tbl_rows = []
     for (b, c) in [(1, 4096), (16, 4096), (32, 4096), (1, 16384), (16, 16384), (1, 65536)]:
@@ -726,7 +744,11 @@ def build_html(kernel_runs, triton_rows, e2e_runs, vs_runs, fp8_runs, quest_runs
   At low KV pressure (<code>B=1, 4K</code>; <code>0.62 GB</code> FP16 KV), per-token FP8 quantize/rescale overhead makes <code>paged_fp8</code> slightly slower than <code>paged_fp16</code> (<code>11.53 ms</code> vs <code>10.68 ms</code>). Once KV traffic dominates HBM at <code>B=64, 4K</code>, <b>FP8 flips to +16% faster</b> (<code>{b64_tok:.1f}</code> vs <code>{b64_16_tok:.1f} tok/s</code>) while cutting KV cache from <b>{b64_16_kv:.2f} GB to {b64_8_kv:.2f} GB</b>. Separately, <code>paged_fp8</code> matches <code>73/73</code> greedy tokens at <code>16K</code> and <code>64K</code> and passes real-text <code>8K</code> PPL (<code>-0.07%</code>), but diverges at step 2 (<code>agree=2</code>) on the low-entropy synthetic repeated <code>4K</code> prompt.
 </div>
 
-<h4>Kernel Head-to-Head vs. FlashInfer (BatchDecodeWithPagedKVCache, CUDA Graph)</h4>
+<h4>Kernel Head-to-Head vs. FlashInfer 0.7.4 (Default CUDA-Core vs. Tensor-Core Path, CUDA Graph)</h4>
+<div class="box info">
+  <div class="box-title">Baseline Audit — FlashInfer Default (use_tensor_cores=False) vs. Tensor-Core Path (use_tensor_cores=True)</div>
+  Against FlashInfer 0.7.4's default decode path (<code>use_tensor_cores=False</code>), our paged FP8 kernel is <b>1.49x–2.45x faster</b> (<code>0.41x–0.67x</code> ratio). With <code>use_tensor_cores=True</code> (recommended for GQA <code>G=4</code>), <b>FP16 is at parity (0.77x–1.10x, ours faster in 13/15 shapes)</b>, while FlashInfer's FP8 Tensor-Core path beats ours in 12 of 15 shapes by up to <b>1.53x</b> (<code>B=4, 64K</code>). A <code>num_splits</code> sweep (<code>benchmarks/sweep_fp8_splits.py</code>) shows two causes: (1) SM wave imbalance at default ~2-CTA/SM splits (2–8x more splits recovers <b>1.30x–1.33x</b> at <code>B=4, 16K/64K</code>), and (2) a ~74% HBM per-SM ceiling from padded <code>M=16</code> rows for <code>G=4</code> plus <code>e4m3-&gt;fp16</code> upcast and per-page scale loads (vs. FlashInfer's single per-tensor scale).
+</div>
 {tbl_fi}
 
 <h4>End-to-End Qwen3-8B Throughput vs. vLLM (tok/s, vLLM skipped at B=64 / 64K OOM budget)</h4>
@@ -807,7 +829,7 @@ def build_html(kernel_runs, triton_rows, e2e_runs, vs_runs, fp8_runs, quest_runs
         tbl_prog=table_html(["Stage / Kernel", "Ours (ms)", "SDPA (ms)", "Ratio", "% Peak", "Max Err", "Commit"], prog_rows, numeric_from=1),
         tbl_sass=table_html(sass_h, sass_rows, numeric_from=1) if sass_rows else "",
         chart_e2e=svg_e2e_throughput_chart(e2e_runs, vs_runs),
-        tbl_fi=table_html(["Method", "Batch", "Ctx", "Ours (ms)", "FlashInfer (ms)", "Ratio"], fi_tbl_rows, numeric_from=1),
+        tbl_fi=table_html(["Dtype", "Batch", "Ctx", "Ours (ms)", "FI Default (ms)", "Ratio (Def)", "FI TC (ms)", "Ratio (TC)"], fi_tbl_rows, numeric_from=1),
         tbl_vllm=table_html(["Batch", "Ctx", "Ours FP16 (tok/s)", "Ours FP8 (tok/s)", "vLLM FP16 (tok/s)", "vLLM FP8 (tok/s)"], vllm_tbl_rows, numeric_from=0),
         chart_nsys=svg_nsys_breakdown_chart(),
         tbl_nsys=table_html(nsys_h, nsys_rows, numeric_from=1) if nsys_rows else "",
@@ -840,13 +862,14 @@ def main():
     triton_rows = load_triton_csv()
     e2e_runs = load_json_dir("e2e_serving")
     vs_runs = load_json_dir("vs_engines")
+    fi_tc_runs = load_json_dir("vs_flashinfer_tc")
     fp8_runs = load_json_dir("quality_fp8")
     quest_runs = load_json_dir("quest_kernel")
     quest_q_runs = load_json_dir("quality_quest")
     tp_runs = load_json_dir("tp_decode")
 
     html_content = build_html(
-        kernel_runs, triton_rows, e2e_runs, vs_runs, fp8_runs, quest_runs, quest_q_runs, tp_runs
+        kernel_runs, triton_rows, e2e_runs, vs_runs, fi_tc_runs, fp8_runs, quest_runs, quest_q_runs, tp_runs
     )
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

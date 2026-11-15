@@ -201,7 +201,7 @@ def e2e_serving_section(runs):
     return out
 
 
-def vs_engines_section(runs):
+def vs_engines_section(runs, fi_tc_runs=None):
     if not runs:
         return []
     latest = runs[-1]
@@ -216,19 +216,22 @@ def vs_engines_section(runs):
         ),
     ]
 
-    fi_rows = [r for r in rows if r.get("engine") == "flashinfer"]
+    fi_tc_latest = fi_tc_runs[-1] if fi_tc_runs else None
+    fi_rows = (fi_tc_latest.get("rows", []) if fi_tc_latest else None) or [
+        r for r in rows if r.get("engine") == "flashinfer"
+    ]
     if fi_rows:
         out += [
             "",
-            "### Kernel-Level vs FlashInfer (`BatchDecodeWithPagedKVCache`, CUDA Graph)",
+            "### Kernel-Level vs FlashInfer 0.7.4 (`BatchDecodeWithPagedKVCache`, CUDA Graph)",
             "",
-            "`ratio < 1.0` means `sparse_kv` is faster.",
+            "`ratio < 1.0` means `sparse_kv` is faster. Measured against both FlashInfer decode paths: default (`use_tensor_cores=False`, CUDA-core decode) and `use_tensor_cores=True` (`_tc`, Tensor-Core path recommended for GQA). FP8 rows are timing-only (per-page vs FlashInfer per-tensor scale).",
             "",
             "| Method | Batch | Context | Ours (ms) | FlashInfer (ms) | Ratio (ours/FI) | Max Err |",
             "|---|---:|---:|---:|---:|---:|---:|",
         ]
         for r in fi_rows:
-            if r.get("batch") not in (1, 4, 16, 32):
+            if r.get("batch") not in (1, 4, 8, 16, 32):
                 continue
             out.append(
                 "| `{m}` | {b} | {c} | {o} | {fi} | {rat}x | {err} |".format(
@@ -241,6 +244,9 @@ def vs_engines_section(runs):
                     err=fmt(r.get("max_err_vs_flashinfer"), "{:.5f}"),
                 )
             )
+        if fi_tc_latest:
+            out += ["", "FlashInfer TC source: `{}`".format(fi_tc_latest["_path"])]
+
 
     eng_rows = [r for r in rows if r.get("engine") in ("sparse_kv", "vllm")]
     if eng_rows:
@@ -594,6 +600,7 @@ def main():
     serving = load("serving_regime")
     e2e = load("e2e_serving")
     vs_eng = load("vs_engines")
+    vs_fi_tc = load("vs_flashinfer_tc")
     fp8_qual = load("quality_fp8")
     quest_k = load("quest_kernel")
     quest_q = load("quality_quest")
@@ -614,7 +621,7 @@ def main():
 
     doc += triton_h100_table()
     doc += e2e_serving_section(e2e)
-    doc += vs_engines_section(vs_eng)
+    doc += vs_engines_section(vs_eng, vs_fi_tc)
     doc += quest_and_fp8_section(fp8_qual, quest_k, quest_q)
     doc += tp_decode_section(tp_dec)
     doc += profiles_section()
