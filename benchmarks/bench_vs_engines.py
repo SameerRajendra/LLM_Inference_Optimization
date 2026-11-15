@@ -13,6 +13,11 @@ Engines (each optional; a missing package skips its rows instead of failing the 
               NHD layout, the same pool tensors) vs torch.ops.sparse_kv.paged_gqa_decode, both
               replayed from CUDA graphs. FlashInfer FP8 uses a per-tensor scale (ours is
               per-page), so FP8 rows are timing-only.
+              --flashinfer-tensor-cores picks FlashInfer's decode path: `off` (the wrapper
+              default, use_tensor_cores=False -> CUDA-core "fa2" decode kernel), `on`
+              (use_tensor_cores=True -> tensor-core prefill-style kernel, which FlashInfer
+              documents as faster for large GQA groups), or `both`. Rows of the `on` path get
+              method kernel_fp16_tc / kernel_fp8_tc; `off` keeps kernel_fp16 / kernel_fp8.
 
 `--engine` takes one engine or a comma-separated list (`all` = sparse_kv,flashinfer,vllm). With
 more than one, every engine runs in its own subprocess (vLLM reserves most of the GPU, and its
@@ -29,6 +34,8 @@ Run:
   python benchmarks/bench_vs_engines.py --engine vllm,flashinfer \
       --sparse-kv-results results/e2e_serving/<run>.json
   python benchmarks/bench_vs_engines.py --engine flashinfer --batches 1,16 --contexts 16384
+  python benchmarks/bench_vs_engines.py --engine flashinfer --flashinfer-tensor-cores both \
+      --bench-name vs_flashinfer_tc
 
 NOTE: keep this file Python-3.9 compatible (no `X | None` annotations).
 """
@@ -173,6 +180,7 @@ def run_flashinfer(args):
         return [], {}
     hq, hkv, d = _attn_dims(args.model)
     bs, dev = args.block_size, "cuda"
+    tc_modes = {"off": [False], "on": [True], "both": [False, True]}[args.flashinfer_tensor_cores]
     rows = []
     for ctx in args.contexts:
         for B in args.batches:
@@ -192,22 +200,34 @@ def run_flashinfer(args):
             last = torch.full((B,), (ctx - 1) % bs + 1, dtype=torch.int32, device=dev)
             ws = torch.empty(256 << 20, dtype=torch.uint8, device=dev)
             for fp8 in (False, True):
-                row = _flashinfer_case(fp8, q, bt, sl, indptr, indices, last, ws, g, ctx,
-                                       (hq, hkv, d, bs), args.kernel_iters)
-                row.update({"engine": "flashinfer", "batch": B, "ctx": ctx})
-                rows.append(row)
-                print("{:>12} B={:<3} ctx={:<6} ours {:.4f} ms  flashinfer {:.4f} ms  ({:.2f}x){}"
-                      .format(row["method"], B, ctx, row["ours_ms"], row["flashinfer_ms"],
-                              row["ours_over_flashinfer"],
+                case_rows = _flashinfer_case(fp8, q, bt, sl, indptr, indices, last, ws, g, ctx,
+                                             (hq, hkv, d, bs), args.kernel_iters, tc_modes)
+                for row in case_rows:
+                    row.update({"engine": "flashinfer", "batch": B, "ctx": ctx})
+                    rows.append(row)
+                    if "flashinfer_error" in row:
+                        print("{:>15} B={:<3} ctx={:<6} ours {:.4f} ms  flashinfer FAILED: {}"
+                              .format(row["method"], B, ctx, row["ours_ms"],
+                                      row["flashinfer_error"]))
+                        continue
+                    print("{:>15} B={:<3} ctx={:<6} ours {:.4f} ms  flashinfer {:.4f} ms  "
+                          "({:.2f}x) [{}]{}".format(
+                              row["method"], B, ctx, row["ours_ms"], row["flashinfer_ms"],
+                              row["ours_over_flashinfer"], row["flashinfer_backend"],
                               "  max_err {:.2e}".format(row["max_err_vs_flashinfer"])
                               if "max_err_vs_flashinfer" in row else ""))
                 gc.collect()
                 torch.cuda.empty_cache()
-    return rows, {"flashinfer_version": getattr(flashinfer, "__version__", "?")}
+    return rows, {"flashinfer_version": getattr(flashinfer, "__version__", "?"),
+                  "flashinfer_tensor_cores": args.flashinfer_tensor_cores}
 
 
-def _flashinfer_case(fp8, q, bt, sl, indptr, indices, last, ws, g, ctx, dims, iters):
-    """One pool (fp16 or fp8) filled with random K/V; ours vs FlashInfer on the same tensors."""
+def _flashinfer_case(fp8, q, bt, sl, indptr, indices, last, ws, g, ctx, dims, iters, tc_modes):
+    """One pool (fp16 or fp8) filled with random K/V; ours vs FlashInfer on the same tensors.
+
+    Ours is timed once per pool; FlashInfer once per entry of tc_modes (use_tensor_cores
+    False / True). Returns one row per FlashInfer config.
+    """
     from sparse_kv import ops as kv_ops
     from triton_kernels.paged_kv import allocate_paged_kv_cache
     hq, hkv, d, bs = dims
@@ -223,24 +243,40 @@ def _flashinfer_case(fp8, q, bt, sl, indptr, indices, last, ws, g, ctx, dims, it
     def ours():
         return kv_ops.paged_gqa_decode(q, kc, vc, bt, sl, ctx, k_scale=ks, v_scale=vs)
 
+    ours_ms, ours_timing = _graph_time(ours, iters)
+
     kv_dtype = torch.float8_e4m3fn if fp8 else torch.float16
-    wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(ws, "NHD")
-    wrapper.plan(indptr, indices, last, hq, hkv, d, bs, pos_encoding_mode="NONE",
-                 q_data_type=torch.float16, kv_data_type=kv_dtype)
     fi_kv = (kc.view(kv_dtype), vc.view(kv_dtype)) if fp8 else (kc, vc)
     fi_kw = {"k_scale": 0.015, "v_scale": 0.015} if fp8 else {}
 
-    def theirs():
-        return wrapper.run(q, fi_kv, **fi_kw)
+    rows = []
+    for use_tc in tc_modes:
+        row = {"method": "kernel_" + ("fp8" if fp8 else "fp16") + ("_tc" if use_tc else ""),
+               "hq": hq, "hkv": hkv, "d": d, "block_size": bs,
+               "flashinfer_use_tensor_cores": use_tc,
+               "ours_ms": ours_ms, "ours_timing": ours_timing}
+        try:
+            wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(
+                ws, "NHD", use_tensor_cores=use_tc)
+            wrapper.plan(indptr, indices, last, hq, hkv, d, bs, pos_encoding_mode="NONE",
+                         q_data_type=torch.float16, kv_data_type=kv_dtype)
 
-    row = {"method": "kernel_" + ("fp8" if fp8 else "fp16"), "hq": hq, "hkv": hkv, "d": d,
-           "block_size": bs}
-    if not fp8:  # same numerics: must agree. FP8 scales differ (per-page vs per-tensor).
-        row["max_err_vs_flashinfer"] = (ours().float() - theirs().float()).abs().max().item()
-    row["ours_ms"], row["ours_timing"] = _graph_time(ours, iters)
-    row["flashinfer_ms"], row["flashinfer_timing"] = _graph_time(theirs, iters)
-    row["ours_over_flashinfer"] = row["ours_ms"] / row["flashinfer_ms"]
-    return row
+            def theirs():
+                return wrapper.run(q, fi_kv, **fi_kw)
+
+            # What "auto" actually ran: "fa2" with use_tensor_cores=False is the CUDA-core
+            # decode kernel; with True it is the tensor-core pick (fa2 / fa3).
+            row["flashinfer_backend"] = str(getattr(wrapper, "resolved_backend", None)
+                                            or getattr(wrapper, "_backend", "?"))
+            if not fp8:  # same numerics: must agree. FP8 scales differ (per-page vs per-tensor).
+                row["max_err_vs_flashinfer"] = (
+                    ours().float() - theirs().float()).abs().max().item()
+            row["flashinfer_ms"], row["flashinfer_timing"] = _graph_time(theirs, iters)
+            row["ours_over_flashinfer"] = ours_ms / row["flashinfer_ms"]
+        except Exception as e:  # noqa: BLE001  (e.g. a dtype combo the TC path rejects)
+            row["flashinfer_error"] = "{}: {}".format(type(e).__name__, str(e)[:300])
+        rows.append(row)
+    return rows
 
 
 # ------------------------------------------------------------------------------- orchestration
@@ -258,6 +294,7 @@ def _child(args, engine, extra_flags):
            "--contexts", ",".join(map(str, args.contexts)), "--steps", str(args.steps),
            "--warmup", str(args.warmup), "--block-size", str(args.block_size),
            "--kernel-iters", str(args.kernel_iters),
+           "--flashinfer-tensor-cores", args.flashinfer_tensor_cores,
            "--vllm-gpu-util", str(args.vllm_gpu_util)] + extra_flags
     print("\n=== " + " ".join(cmd[2:4] + extra_flags))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -329,19 +366,26 @@ def summarize(rows):
         return None
 
     keys = sorted({(r["ctx"], r["batch"]) for r in rows if "batch" in r})
+    has_tc = any(str(r.get("method", "")).endswith("_tc") for r in rows)
     print("\nTPOT ms (lower is better)        ours fp16  vllm fp16   ours fp8   vllm fp8"
-          "   | attn kernel ours/flashinfer:     fp16      fp8")
+          "   | attn kernel ours/flashinfer:     fp16      fp8"
+          + ("   fp16 TC    fp8 TC" if has_tc else ""))
     fmt = lambda x: "{:10.3f}".format(x) if x is not None else "{:>10}".format("-")  # noqa: E731
     rfmt = lambda x: "{:8.2f}x".format(x) if x is not None else "{:>9}".format("-")  # noqa: E731
     for ctx, B in keys:
-        print("ctx {:>6} B {:>3}               {} {} {} {}   |                         {} {}"
+        tc_cols = (" " + rfmt(get("flashinfer", "kernel_fp16_tc", B, ctx, "ours_over_flashinfer"))
+                   + " " + rfmt(get("flashinfer", "kernel_fp8_tc", B, ctx,
+                                    "ours_over_flashinfer"))) if has_tc else ""
+        print("ctx {:>6} B {:>3}               {} {} {} {}   |                         {} {}{}"
               .format(ctx, B, fmt(get("sparse_kv", "paged_fp16", B, ctx, "tpot_ms")),
                       fmt(get("vllm", "vllm_fp16", B, ctx, "tpot_ms")),
                       fmt(get("sparse_kv", "paged_fp8", B, ctx, "tpot_ms")),
                       fmt(get("vllm", "vllm_fp8", B, ctx, "tpot_ms")),
                       rfmt(get("flashinfer", "kernel_fp16", B, ctx, "ours_over_flashinfer")),
-                      rfmt(get("flashinfer", "kernel_fp8", B, ctx, "ours_over_flashinfer"))))
-    print("kernel ratio < 1.0 = ours faster; fp8 kernel rows are timing-only (scales differ).")
+                      rfmt(get("flashinfer", "kernel_fp8", B, ctx, "ours_over_flashinfer")),
+                      tc_cols))
+    print("kernel ratio < 1.0 = ours faster; fp8 kernel rows are timing-only (scales differ)."
+          + (" TC = FlashInfer use_tensor_cores=True." if has_tc else ""))
 
 
 def main():
@@ -360,6 +404,12 @@ def main():
     ap.add_argument("--warmup", type=int, default=8)
     ap.add_argument("--block-size", type=int, default=64)
     ap.add_argument("--kernel-iters", type=int, default=100)
+    ap.add_argument("--flashinfer-tensor-cores", default="off", choices=["off", "on", "both"],
+                    help="FlashInfer decode path: off = wrapper default (CUDA-core fa2 decode), "
+                         "on = use_tensor_cores=True, both = time each (rows *_tc for on)")
+    ap.add_argument("--bench-name", default="vs_engines",
+                    help="results/<bench-name>/ directory to save into (the report scripts read "
+                         "the newest results/vs_engines run, so save side runs elsewhere)")
     ap.add_argument("--vllm-kv-dtype", default="auto", choices=["auto", "fp8"])
     ap.add_argument("--vllm-gpu-util", type=float, default=0.90)
     ap.add_argument("--rows-out", default="", help=argparse.SUPPRESS)  # subprocess hand-off
@@ -396,7 +446,7 @@ def main():
     if not args.no_save:
         extra.update({"model": args.model, "steps": args.steps, "warmup": args.warmup,
                       "block_size": args.block_size, "gpu": torch.cuda.get_device_name()})
-        save_result("vs_engines", rows, label=args.label or args.model.split("/")[-1],
+        save_result(args.bench_name, rows, label=args.label or args.model.split("/")[-1],
                     extra=extra)
 
 

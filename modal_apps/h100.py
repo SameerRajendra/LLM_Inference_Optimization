@@ -8,6 +8,8 @@ Usage:
     modal run modal_apps/h100.py --suite nsys     # WP-5 Nsight Systems NVTX + cuda_gpu_kern_sum (~$0.65)
     modal run modal_apps/h100.py --suite wp5      # tp2 + tp4 + nsys sequentially (~$2.60)
     modal run modal_apps/h100.py --suite all      # e2e + wp5
+    modal run modal_apps/h100.py --suite flashinfer  # kernel vs FlashInfer, use_tensor_cores off+on
+    modal run modal_apps/h100.py --suite splits      # paged FP8/FP16 num_splits sweep (~5 min)
 
 Smoke check for `--suite e2e`:
     modal run modal_apps/h100.py --suite e2e --batches 1 --vs-batches 1 --contexts 4096 \\
@@ -80,7 +82,8 @@ core_image = _mount_repo(
 engines_image = _mount_repo(
     modal.Image.from_registry("nvidia/cuda:12.8.1-devel-ubuntu22.04", add_python="3.11")
     .pip_install("vllm==0.10.2")
-    .pip_install("flashinfer-python")
+    # Pinned to the version behind the published FlashInfer rows (results/vs_engines/*ab46cf5.json).
+    .pip_install("flashinfer-python==0.7.4")
     .pip_install(
         "numpy",
         "pytest",
@@ -232,6 +235,67 @@ def run_e2e(
         if res.returncode != 0:
             print(f"warning: quality_gate_quest exited {res.returncode} (saved JSONs preserved)")
 
+    return {} if no_save else _collect_new_results(start)
+
+
+@app.function(
+    image=engines_image,
+    gpu="H100!",
+    timeout=60 * 60,
+    volumes={"/cache": hf_cache},
+    secrets=SECRETS,
+    memory=48 * 1024,
+)
+def run_flashinfer(
+    model: str = "Qwen/Qwen3-8B",
+    batches: str = "1,4,8,16,32",
+    contexts: str = "4096,16384,65536",
+    tensor_cores: str = "both",
+    no_save: bool = False,
+) -> dict:
+    """Kernel-level ours vs FlashInfer only (no vLLM, no pytest). Saves to results/vs_flashinfer_tc/
+    so the report scripts, which read the newest results/vs_engines run, keep their vLLM rows."""
+    start = time.time()
+    _build_ext()
+    cmd = [
+        "python",
+        "benchmarks/bench_vs_engines.py",
+        "--engine", "flashinfer",
+        "--model", model,
+        "--batches", batches,
+        "--contexts", contexts,
+        "--flashinfer-tensor-cores", tensor_cores,
+        "--bench-name", "vs_flashinfer_tc",
+        "--label", "flashinfer-tc-" + tensor_cores,
+    ]
+    if no_save:
+        cmd.append("--no-save")
+    _run(*cmd)
+    hf_cache.commit()
+    return {} if no_save else _collect_new_results(start)
+
+
+@app.function(image=core_image, gpu="H100!", timeout=30 * 60)
+def run_splits(
+    batches: str = "1,4,16,32",
+    contexts: str = "16384,65536",
+    mults: str = "0.5,1,2,4,8",
+    no_save: bool = False,
+) -> dict:
+    """num_splits sweep of the paged Triton decode kernel (FP16 vs FP8): tests whether FP8 is
+    limited by memory-level parallelism. Saves to results/fp8_split_sweep/."""
+    start = time.time()
+    _build_ext()
+    cmd = [
+        "python",
+        "benchmarks/sweep_fp8_splits.py",
+        "--batches", batches,
+        "--contexts", contexts,
+        "--mults", mults,
+    ]
+    if no_save:
+        cmd.append("--no-save")
+    _run(*cmd)
     return {} if no_save else _collect_new_results(start)
 
 
@@ -500,13 +564,40 @@ def main(
     method: str = "paged_fp8",
     nsys_batches: str = "1,16,64",
     nsys_contexts: str = "4096,65536",
+    fi_tensor_cores: str = "both",
+    split_batches: str = "1,4,16,32",
+    split_contexts: str = "16384,65536",
+    split_mults: str = "0.5,1,2,4,8",
 ):
-    valid = {"kernel", "e2e", "tp2", "tp4", "nsys", "wp5", "all"}
+    valid = {"kernel", "e2e", "tp2", "tp4", "nsys", "wp5", "all", "flashinfer", "splits"}
     if suite not in valid:
         raise SystemExit(f"Unknown --suite {suite!r}; choose from {sorted(valid)}")
 
     if suite == "kernel":
         _write_back(run_kernel.remote(no_save=no_save))
+        return
+
+    if suite == "flashinfer":
+        _write_back(
+            run_flashinfer.remote(
+                model=model,
+                batches=vs_batches,
+                contexts=contexts,
+                tensor_cores=fi_tensor_cores,
+                no_save=no_save,
+            )
+        )
+        return
+
+    if suite == "splits":
+        _write_back(
+            run_splits.remote(
+                batches=split_batches,
+                contexts=split_contexts,
+                mults=split_mults,
+                no_save=no_save,
+            )
+        )
         return
 
     if suite in ("e2e", "all"):
