@@ -1,6 +1,6 @@
 # LLM_Inference_Optimization
 
-**A long-context GQA decode-attention and serving engine in CUDA (`sm_90a`) and Triton for NVIDIA H100 — reaching 86.6% of H100 HBM bandwidth (2,903 GB/s), beating FlashInfer at the kernel level (up to 1.89× on FP8), serving `Qwen/Qwen3-8B` end-to-end with CUDA Graphs at 2.36× over eager PyTorch (2,968.5 tok/s at `B=64` with FP8 KV), scaling `TP=2/4` over NVLink with CUDA Graphs over NCCL (6.5–7.6×), and cutting 64K attention HBM traffic 3.14× via Quest page-sparse decoding.**
+**A long-context GQA decode-attention and serving engine in CUDA (`sm_90a`) and Triton for NVIDIA H100 — reaching 86.6% of H100 HBM bandwidth (2,903 GB/s), matching FlashInfer's Tensor-Core decode kernel on FP16 (0.77×–1.10× latency), serving `Qwen/Qwen3-8B` end-to-end with CUDA Graphs at 2.36× over eager PyTorch (2,968.5 tok/s at `B=64` with FP8 KV), scaling `TP=2/4` over NVLink with CUDA Graphs over NCCL (6.5–7.6×), and cutting 64K attention HBM traffic 3.14× via Quest page-sparse decoding.**
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python)
 ![CUDA](https://img.shields.io/badge/CUDA-12.8-green?logo=nvidia)
@@ -26,7 +26,16 @@ Full provenance-stamped tables auto-generated from `results/` live in [`RESULTS.
 
 ### 1. Decode Kernel vs. SDPA & FlashInfer
 - **Kernel suite (`B=1,4`, `ctx=4K..64K`):** Triton FP16 hits **`2,903 GB/s` (86.6% HBM peak)** at `B=4, 64K`; CUDA Tensor-Core (`gqa_decode_tc.cu` with `HMMA` + `cp.async` `LDGSTS`, verified via `cuobjdump -sass` in [`results/profiles/h100_sass.md`](results/profiles/h100_sass.md)) cuts `cuda_v4` latency by up to 28–38% on FP8/FP16 (`0.2639 ms` vs `0.4228 ms` at `B=4, 64K` FP8).
-- **Head-to-head vs. FlashInfer (`BatchDecodeWithPagedKVCache`, CUDA Graph):** Matches or beats FlashInfer FP16 (`0.74×–0.99×` latency, `max_err = 6.1e-5`) and beats FlashInfer FP8 by **1.48×–2.40×** (`0.42×–0.68×` latency) with per-page scaling.
+- **Head-to-head vs. FlashInfer 0.7.4** (`BatchDecodeWithPagedKVCacheWrapper`, NHD, `page_size=64`, same page table and KV pool, both CUDA-Graph replayed, mean of 100 replays). Measured against **both** FlashInfer decode paths in one run ([`results/vs_flashinfer_tc/`](results/vs_flashinfer_tc/), `B=1..32`, `ctx=4K/16K/64K`, 15 shapes). Latency ratio = ours / FlashInfer (< 1.0 = ours faster):
+
+  | KV dtype | vs. FlashInfer default (`use_tensor_cores=False`, CUDA-core decode) | vs. FlashInfer `use_tensor_cores=True` (Tensor-Core path) |
+  |---|---|---|
+  | FP16 | `0.82×–1.08×` (ours faster in 14/15) | **`0.77×–1.10×` — parity** (ours faster in 13/15; both kernels reach ~90% of HBM peak at the largest shapes, so there is little left to win) |
+  | FP8 `e4m3` | `0.41×–0.67×` (ours **1.49×–2.45×** faster in 15/15) | `0.51×–1.53×` — **FlashInfer faster in 12/15**, by up to **1.53×** (`B=4, 64K`) |
+
+  - FP16 outputs agree to `max_err = 6.1e-5`. FP8 rows are timing-only: FlashInfer uses a per-tensor scale (`k_scale = v_scale = 0.015`); ours uses per-(64-token page, KV head) fp32 scales.
+  - Earlier versions of this README compared only against FlashInfer's default path. FlashInfer recommends `use_tensor_cores=True` for large GQA groups (here `G = 32/8 = 4`), so the Tensor-Core column is the fair FP8 baseline.
+  - **Why our paged FP8 kernel trails** ([`benchmarks/sweep_fp8_splits.py`](benchmarks/sweep_fp8_splits.py), [`results/fp8_split_sweep/`](results/fp8_split_sweep/)): paged FP8 reaches only 1.6–2.5 TB/s (FP8 time ≈ 0.59–0.90× FP16 at default splits, instead of the bandwidth-bound 0.50×). A `num_splits` sweep shows two causes. (1) **SM load imbalance:** the default ~2-CTA/SM split grid leaves 288 CTAs on 132 SMs at `B=4`; 2–8× more splits gives **1.30×–1.33×** at `B=4` (16K/64K). FP16 is unaffected because it is HBM-bound. (2) **A per-SM throughput ceiling** (~74% of HBM peak even at the best split count) that is likely due to per-token work: padded `M=16` rows for `G=4`, and e4m3→fp16 conversion. A third suspect, not yet confirmed: the Triton autotune key (`next_power_of_2(B * max_seq_len)`) is shared by shapes such as `B=16×4K`, `B=4×16K` and `B=1×64K`, so a config tuned on one can be reused on another (`B=1, 64K` FP8: `0.0641 ms` freshly tuned vs `0.0829 ms` in the head-to-head run).
 
 ### 2. End-to-End `Qwen/Qwen3-8B` Serving vs. PyTorch & vLLM
 
@@ -59,6 +68,7 @@ Full provenance-stamped tables auto-generated from `results/` live in [`RESULTS.
 - **Stage 4a 2× occupancy regressed both FP8 & FP16** (`0.1251 -> 0.1372 ms`): scalar CUDA was instruction-issue bound (~1,700 ops/lane), solved by Tensor Cores (`gqa_decode_tc.cu` + Triton `tl.dot`).
 - **`torch.compile` (`sdpa_compile`) collapsed at batch/long-context** (`467.98 ms` at `B=64, 4K`) due to dynamic KV shapes, whereas `torch.library.custom_op` + static CUDA Graphs scale to `2,968.5 tok/s`.
 - **`Quest@12.5%` passed `3/3` needle recall yet failed PPL (`+7.66%`)**: exposed a sharpness cliff vs. `25%` (`+0.19%` PPL).
+- **The "beats FlashInfer FP8 by 1.5–2.4×" result was against FlashInfer's default (CUDA-core) decode path.** With `use_tensor_cores=True`, FlashInfer's FP8 is faster in 12 of 15 shapes (up to `1.53×`). A `num_splits` sweep traced part of the gap to SM load imbalance in our split heuristic (`1.30–1.33×` recoverable at `B=4`); the rest is a per-SM ceiling in the paged FP8 kernel.
 - **Eager `nsys` dispatch wall (68% host overhead)** + **unfused graph (~22% gap vs. vLLM)** + **FP8 crossover** (slower at `B=1, 4K` `11.53 vs 10.68 ms`, `+16%` faster at `B=64, 4K`; `agree=2` tie divergence on repeated `4K` synthetic prompt).
 
 ---
@@ -87,7 +97,8 @@ LLM_Inference_Optimization/
 ├── benchmarks/
 │   ├── bench_triton_decode.py    # Kernel suite vs SDPA (CUDA v4, cuda_tc, Triton)
 │   ├── bench_e2e_serving.py      # Full Qwen3-8B CUDA Graph serving sweep
-│   ├── bench_vs_engines.py       # Head-to-head vs FlashInfer & vLLM
+│   ├── bench_vs_engines.py       # Head-to-head vs FlashInfer (default + tensor-core paths) & vLLM
+│   ├── sweep_fp8_splits.py       # Paged FP16/FP8 num_splits sweep (GB/s + autotuned config)
 │   ├── quality_gate_fp8.py       # Teacher-forced PPL & parity gate for FP8 KV
 │   ├── quality_gate_quest.py     # 64K Quest speedup + PPL + needle-in-a-haystack gate
 │   ├── bench_tp_decode.py        # TP=2/4 NCCL AllReduce + CUDA Graph benchmark
@@ -96,7 +107,7 @@ LLM_Inference_Optimization/
 │   ├── bench_common.py           # Provenance-stamped JSON/Markdown writer
 │   └── make_report.py            # Generates RESULTS.md from results/
 ├── modal_apps/
-│   └── h100.py                   # Consolidated Modal H100 runner (--suite kernel|e2e|tp2|tp4|nsys|wp5|all)
+│   └── h100.py                   # Consolidated Modal H100 runner (--suite kernel|e2e|tp2|tp4|nsys|wp5|all|flashinfer|splits)
 ├── tests/                        # Unit, Triton-interpret, CUDA, CUDA Graph, & TP tests
 ├── profiles/                     # WP-5 profiling runbook
 ├── results/                      # Measured JSON, CSV, and profile artifacts
@@ -131,6 +142,8 @@ Run H100 suites on Modal ([`modal_apps/h100.py`](modal_apps/h100.py)):
 modal run modal_apps/h100.py --suite kernel   # WP-1/WP-3/WP-4 kernel + quality gates
 modal run modal_apps/h100.py --suite e2e      # WP-2 Qwen3-8B vs SDPA, FlashInfer & vLLM
 modal run modal_apps/h100.py --suite wp5      # WP-5 TP=2, TP=4, & E2E nsys profiling
+modal run modal_apps/h100.py --suite flashinfer  # Kernel vs FlashInfer, use_tensor_cores off + on
+modal run modal_apps/h100.py --suite splits      # Paged FP16/FP8 num_splits sweep
 ```
 
 Regenerate [`RESULTS.md`](RESULTS.md) from JSON/CSV results:
